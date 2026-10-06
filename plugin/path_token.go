@@ -37,9 +37,14 @@ var accessTokenSchema = map[string]*framework.FieldSchema{
 		Type:        framework.TypeCommaStringSlice,
 		Description: "List of scopes",
 	},
+	"ttl": {
+		Type:        framework.TypeDurationSecond,
+		Description: "Lease duration. The token is revoked in Gitlab when the lease expires or is revoked. Defaults to the mount default lease TTL",
+	},
 	"expires_at": {
 		Type:        framework.TypeTime,
-		Description: "The token expires at midnight UTC on that date",
+		Description: "Deprecated: use ttl. Sets the lease to end at this time",
+		Deprecated:  true,
 	},
 	"access_level": {
 		Type:        framework.TypeInt,
@@ -64,11 +69,6 @@ func tokenDetails(pat *PAT) map[string]any {
 }
 
 func (b *GitlabBackend) pathTokenCreate(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
-	gc, err := b.getClient(ctx, req.Storage)
-	if err != nil {
-		return logical.ErrorResponse("failed to obtain gitlab client - %s", err.Error()), nil
-	}
-
 	var tokenStorage TokenStorageEntry
 	tokenStorage.retrieve(data)
 
@@ -86,15 +86,7 @@ func (b *GitlabBackend) pathTokenCreate(ctx context.Context, req *logical.Reques
 		return logical.ErrorResponse("Failed to validate - " + err.Error()), nil
 	}
 
-	b.Logger().Debug("generating access token", "id", tokenStorage.BaseTokenStorage.ID,
-		"name", tokenStorage.BaseTokenStorage.Name, "scopes", tokenStorage.BaseTokenStorage.Scopes)
-
-	pat, err := gc.CreateProjectAccessToken(&tokenStorage.BaseTokenStorage, tokenStorage.ExpiresAt)
-	if err != nil {
-		return logical.ErrorResponse("Failed to create a token - " + err.Error()), nil
-	}
-
-	return &logical.Response{Data: tokenDetails(pat)}, nil
+	return b.issueToken(ctx, req, config, &tokenStorage.BaseTokenStorage, tokenStorage.leaseTTL())
 }
 
 // There is a correctness check that verifies there is an ExistenceFunc for all
@@ -153,8 +145,10 @@ func pathToken(b *GitlabBackend) []*framework.Path {
 //nolint:gosec
 const pathTokenHelpSyn = `Generate a project access token for a given project with token name, scopes.`
 const pathTokenHelpDesc = `
-This path allows you to generate a project access token. You must supply a project id to generate a token for, a name, which 
+This path allows you to generate a project access token. You must supply a project id to generate a token for, a name, which
 will be used as a name field in Gitlab, and scopes for the generated project access token.
+
+The token is leased for ttl and revoked in Gitlab when the lease expires or is revoked.
 `
 
 var tokenExamples = []framework.RequestExample{
@@ -164,6 +158,7 @@ var tokenExamples = []framework.RequestExample{
 			"id":     1,
 			"name":   "MyProjectAccessToken",
 			"scopes": []string{"read_api", "read_repository"},
+			"ttl":    "1h",
 		},
 	},
 }

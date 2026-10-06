@@ -29,7 +29,24 @@ var errAccessLevelNotPermitted = errors.New("access level not permitted")
 // TokenStorageEntry represents the token metadata stored in vault.
 type TokenStorageEntry struct {
 	BaseTokenStorage BaseTokenStorageEntry
-	ExpiresAt        *time.Time `json:"expires_at" structs:"expires_at" mapstructure:"expires_at,omitempty"`
+	// TTL is the lease duration; the token is revoked in GitLab when it ends.
+	TTL time.Duration `json:"ttl" structs:"ttl" mapstructure:"ttl,omitempty"`
+	// Deprecated: ExpiresAt is converted into TTL.
+	ExpiresAt *time.Time `json:"expires_at" structs:"expires_at" mapstructure:"expires_at,omitempty"`
+}
+
+// leaseTTL returns the requested lease duration: ttl, else the time left until
+// the deprecated expires_at, else zero (mount default).
+func (tokenStorage *TokenStorageEntry) leaseTTL() time.Duration {
+	if tokenStorage.TTL > 0 {
+		return tokenStorage.TTL
+	}
+
+	if tokenStorage.ExpiresAt != nil {
+		return time.Until(*tokenStorage.ExpiresAt)
+	}
+
+	return 0
 }
 
 // BaseTokenStorageEntry represents the base token metadata stored in vault.
@@ -47,6 +64,19 @@ func (tokenStorage *TokenStorageEntry) assertValid(maxTTL time.Duration, allowOw
 	e := tokenStorage.BaseTokenStorage.assertValid(allowOwnerLevel)
 	if e != nil {
 		err = multierror.Append(err, e)
+	}
+
+	if tokenStorage.TTL > 0 && tokenStorage.ExpiresAt != nil {
+		err = multierror.Append(err, errors.New("ttl and expires_at are mutually exclusive"))
+	}
+
+	if tokenStorage.ExpiresAt != nil && !tokenStorage.ExpiresAt.After(time.Now()) {
+		err = multierror.Append(err, errors.New("expires_at is in the past"))
+	}
+
+	if maxTTL > time.Duration(0) && tokenStorage.TTL > maxTTL {
+		errMsg := fmt.Sprintf("Requested ttl '%v' exceeds configured maximum ttl of '%v's", tokenStorage.TTL, int64(maxTTL/time.Second))
+		err = multierror.Append(err, errors.New(errMsg))
 	}
 
 	if maxTTL > time.Duration(0) && tokenStorage.ExpiresAt != nil {
@@ -100,6 +130,11 @@ func (baseTokenStorage *BaseTokenStorageEntry) assertValid(allowOwnerLevel bool)
 
 func (tokenStorage *TokenStorageEntry) retrieve(data *framework.FieldData) {
 	tokenStorage.BaseTokenStorage.retrieve(data)
+
+	if ttlRaw, ok := data.GetOk("ttl"); ok {
+		ttl, _ := ttlRaw.(int)
+		tokenStorage.TTL = time.Duration(ttl) * time.Second
+	}
 
 	if expiresAtRaw, ok := data.GetOk("expires_at"); ok {
 		t, _ := expiresAtRaw.(time.Time)

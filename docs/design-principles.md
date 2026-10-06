@@ -26,6 +26,12 @@ path `/token/:<role_name>`
 
 - Create/Update: generate a project access token with stored parameters for the role
 
+Every generated token is returned as a Vault lease. GitLab only supports
+day-granular expiry (tomorrow at the earliest), so the token is created with a
+backstop expiry after the lease's maximum lifetime and deleted through the
+GitLab API when the lease expires or is revoked. See the README's
+"Token lifetime" section.
+
 ## Things to Note
 
 ### Access Control
