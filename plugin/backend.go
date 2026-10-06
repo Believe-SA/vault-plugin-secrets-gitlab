@@ -50,7 +50,7 @@ func (b *GitlabBackend) getClient(ctx context.Context, s logical.Storage) (Clien
 	defer func() { unlockFunc() }() // nosemgrep: trailofbits.go.missing-runlock-on-rwmutex.missing-runlock-on-rwmutex
 
 	if b.client != nil && b.client.Valid() {
-		return b.client, nil
+		return b.client, nil // nosemgrep: trailofbits.go.missing-runlock-on-rwmutex.missing-runlock-on-rwmutex -- released by the deferred unlockFunc
 	}
 
 	b.lock.RUnlock()
