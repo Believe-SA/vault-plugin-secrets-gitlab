@@ -48,7 +48,7 @@ func TestAccToken(t *testing.T) {
 		}
 		resp, err := testIssueToken(t, backend, req, d)
 		require.NoError(t, err)
-		require.False(t, resp.IsError())
+		require.False(t, resp.IsError(), resp.Error())
 
 		assert.NotEmpty(t, resp.Data["token"], "no token returned")
 		assert.NotEmpty(t, resp.Data["id"], "no id returned")
@@ -66,7 +66,7 @@ func TestAccToken(t *testing.T) {
 		}
 		resp, err := testIssueToken(t, backend, req, d)
 		require.NoError(t, err)
-		require.False(t, resp.IsError())
+		require.False(t, resp.IsError(), resp.Error())
 
 		assert.NotEmpty(t, resp.Data["token"], "no token returned")
 		assert.NotEmpty(t, resp.Data["id"], "no id returned")
@@ -87,7 +87,7 @@ func TestAccToken(t *testing.T) {
 		}
 		resp, err := testIssueToken(t, backend, req, d)
 		require.NoError(t, err)
-		require.False(t, resp.IsError())
+		require.False(t, resp.IsError(), resp.Error())
 
 		assert.NotEmpty(t, resp.Data["token"], "no token returned")
 		assert.NotEmpty(t, resp.Data["id"], "no id returned")
@@ -186,7 +186,7 @@ func TestFlatPathToken(t *testing.T) {
 			"scopes": []string{"read_api"},
 		})
 		require.NoError(t, err)
-		require.False(t, resp.IsError())
+		require.False(t, resp.IsError(), resp.Error())
 
 		assert.Equal(t, "test-token-value", resp.Data["token"])
 		assert.EqualValues(t, 1, resp.Data["id"])
@@ -208,7 +208,7 @@ func TestFlatPathToken(t *testing.T) {
 			"expires_at": e.Unix(),
 		})
 		require.NoError(t, err)
-		require.False(t, resp.IsError())
+		require.False(t, resp.IsError(), resp.Error())
 		assert.Equal(t, "test-token-value", resp.Data["token"])
 	})
 
@@ -226,7 +226,7 @@ func TestFlatPathToken(t *testing.T) {
 			"access_level": 30,
 		})
 		require.NoError(t, err)
-		require.False(t, resp.IsError())
+		require.False(t, resp.IsError(), resp.Error())
 		assert.Equal(t, gitlab.AccessLevelValue(30), resp.Data["access_level"])
 	})
 
@@ -296,7 +296,7 @@ func TestFlatPathToken(t *testing.T) {
 			"access_level": 50,
 		})
 		require.NoError(t, err)
-		require.False(t, resp.IsError())
+		require.False(t, resp.IsError(), resp.Error())
 		assert.Equal(t, gitlab.AccessLevelValue(50), resp.Data["access_level"])
 	})
 
@@ -349,7 +349,7 @@ func TestAccFlatPathToken(t *testing.T) {
 		}
 		resp, err := testIssueFlatPathToken(t, backend, req, ID, "vault-flat-test", d)
 		require.NoError(t, err)
-		require.False(t, resp.IsError())
+		require.False(t, resp.IsError(), resp.Error())
 
 		assert.NotEmpty(t, resp.Data["token"])
 		assert.NotEmpty(t, resp.Data["id"])
@@ -364,7 +364,7 @@ func TestAccFlatPathToken(t *testing.T) {
 		}
 		resp, err := testIssueFlatPathToken(t, backend, req, ID, "vault-flat-test-expires", d)
 		require.NoError(t, err)
-		require.False(t, resp.IsError())
+		require.False(t, resp.IsError(), resp.Error())
 
 		assert.NotEmpty(t, resp.Data["token"])
 		assert.Equal(t, e.UTC().Format("2006-01-02"), resp.Data["expires_at"].(time.Time).Format("2006-01-02"))
@@ -379,7 +379,7 @@ func TestAccFlatPathToken(t *testing.T) {
 		}
 		resp, err := testIssueFlatPathToken(t, backend, req, ID, "vault-flat-test-access-level", d)
 		require.NoError(t, err)
-		require.False(t, resp.IsError())
+		require.False(t, resp.IsError(), resp.Error())
 
 		assert.NotEmpty(t, resp.Data["token"])
 		assert.Equal(t, gitlab.AccessLevelValue(30), resp.Data["access_level"])
