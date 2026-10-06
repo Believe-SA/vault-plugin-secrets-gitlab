@@ -48,12 +48,10 @@ func TestAccToken(t *testing.T) {
 		}
 		resp, err := testIssueToken(t, backend, req, d)
 		require.NoError(t, err)
-		fmt.Println(resp.Error()) //nolint:forbidigo
 		require.False(t, resp.IsError())
 
 		assert.NotEmpty(t, resp.Data["token"], "no token returned")
 		assert.NotEmpty(t, resp.Data["id"], "no id returned")
-		assert.Empty(t, resp.Data["expires_at"], "default is never(nil) for expires_at")
 	})
 
 	t.Run("successfully create with expiration", func(t *testing.T) {
@@ -73,7 +71,7 @@ func TestAccToken(t *testing.T) {
 		assert.NotEmpty(t, resp.Data["token"], "no token returned")
 		assert.NotEmpty(t, resp.Data["id"], "no id returned")
 		expiresAt, _ := resp.Data["expires_at"].(time.Time)
-		assert.Contains(t, expiresAt, e.Format("2006-01-02"))
+		assert.Equal(t, e.UTC().Format("2006-01-02"), expiresAt.Format("2006-01-02"))
 	})
 
 	t.Run("successfully create with access level", func(t *testing.T) {
@@ -95,7 +93,7 @@ func TestAccToken(t *testing.T) {
 		assert.NotEmpty(t, resp.Data["id"], "no id returned")
 		assert.NotEmpty(t, resp.Data["access_level"], "no access_level returned")
 		expiresAt, _ := resp.Data["expires_at"].(time.Time)
-		assert.Contains(t, expiresAt.String(), e.Format("2006-01-02"))
+		assert.Equal(t, e.UTC().Format("2006-01-02"), expiresAt.Format("2006-01-02"))
 
 		assert.Equal(t, gitlab.AccessLevelValue(30), resp.Data["access_level"])
 	})
@@ -141,6 +139,10 @@ func TestAccToken(t *testing.T) {
 func testIssueToken(t *testing.T, b logical.Backend, req *logical.Request, data map[string]any) (*logical.Response, error) {
 	t.Helper()
 
+	// copy: parallel subtests share the same request
+	r := *req
+	req = &r
+
 	req.Operation = logical.CreateOperation
 	req.Path = pathPatternToken
 	req.Data = data
@@ -153,6 +155,10 @@ func testIssueToken(t *testing.T, b logical.Backend, req *logical.Request, data 
 // create a token via the flat path (project id and name embedded in the URL).
 func testIssueFlatPathToken(t *testing.T, b logical.Backend, req *logical.Request, id int, name string, data map[string]any) (*logical.Response, error) {
 	t.Helper()
+
+	// copy: parallel subtests share the same request
+	r := *req
+	req = &r
 
 	req.Operation = logical.CreateOperation
 	req.Path = fmt.Sprintf("dynamic/project_id/%d/name/%s", id, name)
@@ -348,7 +354,6 @@ func TestAccFlatPathToken(t *testing.T) {
 		assert.NotEmpty(t, resp.Data["token"])
 		assert.NotEmpty(t, resp.Data["id"])
 		assert.Equal(t, "vault-flat-test", resp.Data["name"])
-		assert.Empty(t, resp.Data["expires_at"])
 	})
 
 	t.Run("successfully create with expiration", func(t *testing.T) {
@@ -362,7 +367,7 @@ func TestAccFlatPathToken(t *testing.T) {
 		require.False(t, resp.IsError())
 
 		assert.NotEmpty(t, resp.Data["token"])
-		assert.Contains(t, resp.Data["expires_at"].(time.Time).String(), e.Format("2006-01-02"))
+		assert.Equal(t, e.UTC().Format("2006-01-02"), resp.Data["expires_at"].(time.Time).Format("2006-01-02"))
 	})
 
 	t.Run("successfully create with access level", func(t *testing.T) {

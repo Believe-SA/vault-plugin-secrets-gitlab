@@ -5,6 +5,9 @@ name: Release
 #   * push to main           -> derive the next semver from Conventional Commits
 #                               since the last tag, create it, and build it
 # Docs/chore/ci-only pushes to main produce no release.
+#
+# Every release is gated on the live acceptance tests against a disposable
+# GitLab CE instance; nothing is tagged or published if they fail.
 on:
   push:
     branches: [main]
@@ -17,64 +20,64 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Path 1 — a v* tag was pushed directly. Build that tag.
-  tagged:
-    if: github.ref_type == 'tag'
+  # Decide whether this push produces a release, and which tag.
+  plan:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
+    outputs:
+      tag: ${{ steps.tagged.outputs.tag || steps.next.outputs.new_tag }}
     steps:
+      - name: Pushed tag
+        id: tagged
+        if: github.ref_type == 'tag'
+        run: echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache: true
-      - uses: goreleaser/goreleaser-action@v7
-        with:
-          version: "~> v2"
-          args: release --clean
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # Path 2 — push to main. Compute the next version from Conventional Commits,
-  # tag it, and release in the same job (a GITHUB_TOKEN-pushed tag does not
-  # itself trigger the `tagged` job, so there is no double build).
-  auto:
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v6
+        if: github.ref == 'refs/heads/main'
         with:
           fetch-depth: 0
       - name: Compute next version (Conventional Commits)
-        id: tag
+        id: next
+        if: github.ref == 'refs/heads/main'
         uses: mathieudutour/github-tag-action@v6.2
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           release_branches: main
           default_bump: false
-          dry_run: true # compute only; we create a lightweight tag ourselves
+          dry_run: true # compute only; the release job creates the tag
+
+  acceptance:
+    needs: plan
+    if: needs.plan.outputs.tag != ''
+    uses: ./.github/workflows/gitlab-acceptance.yml
+    permissions:
+      contents: read
+
+  release:
+    needs: [plan, acceptance]
+    if: needs.plan.outputs.tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - name: Create and push tag
-        if: steps.tag.outputs.new_tag != ''
+        if: github.ref_type != 'tag'
         run: |
           # A lightweight tag on HEAD — GoReleaser requires the current tag to
           # point at the built commit, which annotated tags from the action break.
-          git tag "${{ steps.tag.outputs.new_tag }}"
-          git push origin "${{ steps.tag.outputs.new_tag }}"
+          git tag "${{ needs.plan.outputs.tag }}"
+          git push origin "${{ needs.plan.outputs.tag }}"
       - uses: actions/setup-go@v6
-        if: steps.tag.outputs.new_tag != ''
         with:
           go-version-file: go.mod
           cache: true
       - uses: goreleaser/goreleaser-action@v7
-        if: steps.tag.outputs.new_tag != ''
         with:
           version: "~> v2"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GORELEASER_CURRENT_TAG: ${{ steps.tag.outputs.new_tag }}
+          GORELEASER_CURRENT_TAG: ${{ needs.plan.outputs.tag }}
