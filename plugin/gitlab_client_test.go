@@ -15,6 +15,7 @@
 package gitlabtoken
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -75,7 +76,12 @@ func TestValid(t *testing.T) {
 	}
 }
 
-type mockGitlabClient struct{}
+type mockGitlabClient struct {
+	mu        sync.Mutex
+	expiresAt []*time.Time
+	revoked   [][2]int64
+	revokeErr error
+}
 
 var _ Client = &mockGitlabClient{}
 
@@ -86,7 +92,11 @@ func (ac *mockGitlabClient) Valid() bool {
 //	func (ac *mockGitlabClient) ListProjectAccessToken(id int) ([]*PAT, error) {
 //		return nil, nil
 //	}
-func (ac *mockGitlabClient) CreateProjectAccessToken(tokenStorage *BaseTokenStorageEntry, _ *time.Time) (*PAT, error) {
+func (ac *mockGitlabClient) CreateProjectAccessToken(tokenStorage *BaseTokenStorageEntry, expiresAt *time.Time) (*PAT, error) {
+	ac.mu.Lock()
+	ac.expiresAt = append(ac.expiresAt, expiresAt)
+	ac.mu.Unlock()
+
 	return &PAT{
 		PersonalAccessToken: gitlab.PersonalAccessToken{
 			ID:     int64(tokenStorage.ID),
@@ -98,6 +108,15 @@ func (ac *mockGitlabClient) CreateProjectAccessToken(tokenStorage *BaseTokenStor
 	}, nil
 }
 
-// func (ac *mockGitlabClient) RevokeProjectAccessToken(tokenStorage *BaseTokenStorageEntry) error {
-// 	return nil
-// }
+func (ac *mockGitlabClient) RevokeProjectAccessToken(projectID int, tokenID int64) error {
+	ac.mu.Lock()
+	defer ac.mu.Unlock()
+
+	if ac.revokeErr != nil {
+		return ac.revokeErr
+	}
+
+	ac.revoked = append(ac.revoked, [2]int64{int64(projectID), tokenID})
+
+	return nil
+}

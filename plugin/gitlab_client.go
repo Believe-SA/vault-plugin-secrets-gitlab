@@ -17,6 +17,7 @@ package gitlabtoken
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
 	gitlab "gitlab.com/gitlab-org/api/client-go"
@@ -36,7 +37,7 @@ const (
 type Client interface {
 	// ListProjectAccessToken(int) ([]*PAT, error)
 	CreateProjectAccessToken(e *BaseTokenStorageEntry, t *time.Time) (*PAT, error)
-	// RevokeProjectAccessToken(*BaseTokenStorageEntry) error
+	RevokeProjectAccessToken(projectID int, tokenID int64) error
 	Valid() bool
 }
 
@@ -105,6 +106,14 @@ func (gc *GitlabClient) CreateProjectAccessToken(tokenStorage *BaseTokenStorageE
 	return pat, nil
 }
 
-// func (gc *gitlabClient) RevokeProjectAccessToken(tokenStorage *BaseTokenStorageEntry) error {
-// 	return nil
-// }
+// RevokeProjectAccessToken revokes a Project Access Token. A token that no
+// longer exists (already revoked, expired and purged, or project deleted) is
+// treated as successfully revoked.
+func (gc *GitlabClient) RevokeProjectAccessToken(projectID int, tokenID int64) error {
+	resp, err := gc.client.ProjectAccessTokens.RevokeProjectAccessToken(projectID, tokenID)
+	if resp != nil && resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+
+	return err
+}

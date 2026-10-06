@@ -40,6 +40,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -59,12 +60,15 @@ const (
 	rootToken     = "root"
 )
 
-// fakeGitlab records project access token creations and answers like GitLab.
+// fakeGitlab records project access token creations and revocations and
+// answers like GitLab, including its day-granular expiry rule.
 type fakeGitlab struct {
 	*httptest.Server
 
 	mu       sync.Mutex
 	requests []fakeRequest
+	active   map[string]bool // "<project>/<token id>" -> not revoked yet
+	revoked  []string
 }
 
 type fakeRequest struct {
@@ -73,13 +77,22 @@ type fakeRequest struct {
 	Body      map[string]any
 }
 
-var accessTokensPath = regexp.MustCompile(`^/api/v4/projects/([^/]+)/access_tokens$`)
+var (
+	accessTokensPath = regexp.MustCompile(`^/api/v4/projects/([^/]+)/access_tokens$`)
+	accessTokenPath  = regexp.MustCompile(`^/api/v4/projects/([^/]+)/access_tokens/(\d+)$`)
+)
 
 func newFakeGitlab(t *testing.T) *fakeGitlab {
 	t.Helper()
 
-	f := &fakeGitlab{}
+	f := &fakeGitlab{active: map[string]bool{}}
 	f.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if m := accessTokenPath.FindStringSubmatch(r.URL.Path); m != nil && r.Method == http.MethodDelete {
+			f.revoke(w, m[1]+"/"+m[2])
+
+			return
+		}
+
 		m := accessTokensPath.FindStringSubmatch(r.URL.Path)
 		if r.Method != http.MethodPost || m == nil {
 			http.NotFound(w, r)
@@ -91,9 +104,22 @@ func newFakeGitlab(t *testing.T) *fakeGitlab {
 		raw, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(raw, &body)
 
+		// GitLab only accepts a date, at the earliest tomorrow (UTC).
+		expiresAt, _ := body["expires_at"].(string)
+		tomorrow := time.Now().UTC().Truncate(24 * time.Hour).Add(24 * time.Hour)
+
+		d, err := time.Parse("2006-01-02", expiresAt)
+		if err != nil || d.Before(tomorrow) {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = fmt.Fprintf(w, `{"message":"expires_at %q is invalid"}`, expiresAt)
+
+			return
+		}
+
 		f.mu.Lock()
 		f.requests = append(f.requests, fakeRequest{ProjectID: m[1], Token: r.Header.Get("Private-Token"), Body: body})
 		n := len(f.requests)
+		f.active[fmt.Sprintf("%s/%d", m[1], 1000+n)] = true
 		f.mu.Unlock()
 
 		accessLevel := body["access_level"]
@@ -116,6 +142,44 @@ func newFakeGitlab(t *testing.T) *fakeGitlab {
 	t.Cleanup(f.Close)
 
 	return f
+}
+
+func (f *fakeGitlab) revoke(w http.ResponseWriter, key string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if !f.active[key] {
+		w.WriteHeader(http.StatusNotFound)
+
+		return
+	}
+
+	f.active[key] = false
+	f.revoked = append(f.revoked, key)
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (f *fakeGitlab) isRevoked(key string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return slices.Contains(f.revoked, key)
+}
+
+func (f *fakeGitlab) activeCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	n := 0
+
+	for _, ok := range f.active {
+		if ok {
+			n++
+		}
+	}
+
+	return n
 }
 
 func (f *fakeGitlab) last(t *testing.T) fakeRequest {
@@ -362,7 +426,97 @@ func TestVault(t *testing.T) {
 		assert.Equal(t, "ci-token", req.Body["name"])
 		assert.Equal(t, []any{"read_api", "read_repository"}, req.Body["scopes"])
 		assert.InDelta(t, 30, req.Body["access_level"], 0)
-		assert.Equal(t, expires.Format("2006-01-02"), req.Body["expires_at"])
+
+		// deprecated expires_at now sets the lease; GitLab gets the backstop
+		assert.InDelta(t, (48 * time.Hour).Seconds(), float64(resp.LeaseDuration), 10)
+		assert.True(t, resp.Renewable)
+
+		backstop, err := time.Parse("2006-01-02", req.Body["expires_at"].(string))
+		require.NoError(t, err)
+		assert.True(t, backstop.After(expires), "GitLab expiry %s must outlive the lease", backstop)
+	})
+
+	t.Run("sub-day ttl: gitlab gets tomorrow, vault revokes when the lease expires", func(t *testing.T) {
+		resp, err := logical.Write("gitlab/token", map[string]any{
+			"id": 11, "name": "short-lived", "scopes": "read_api", "ttl": "3s",
+		})
+		require.NoError(t, err)
+		require.NotEmpty(t, resp.LeaseID)
+		assert.Equal(t, 3, resp.LeaseDuration)
+
+		req := gitlab.last(t)
+		tomorrow := time.Now().UTC().Truncate(24 * time.Hour).Add(24 * time.Hour)
+		backstop, err := time.Parse("2006-01-02", req.Body["expires_at"].(string))
+		require.NoError(t, err)
+		assert.False(t, backstop.Before(tomorrow))
+
+		key := fmt.Sprintf("11/%s", resp.Data["id"])
+		assert.False(t, gitlab.isRevoked(key))
+		require.Eventually(t, func() bool { return gitlab.isRevoked(key) }, 30*time.Second, 250*time.Millisecond,
+			"Vault should revoke the GitLab token when its lease expires")
+	})
+
+	t.Run("lease revoke deletes the token in gitlab", func(t *testing.T) {
+		resp, err := logical.Write("gitlab/dynamic/project_id/12/name/revoked", map[string]any{"scopes": "read_api", "ttl": "1h"})
+		require.NoError(t, err)
+
+		key := fmt.Sprintf("12/%s", resp.Data["id"])
+		require.NoError(t, sys.RevokeWithContext(ctx, resp.LeaseID))
+		require.Eventually(t, func() bool { return gitlab.isRevoked(key) }, 10*time.Second, 100*time.Millisecond)
+	})
+
+	t.Run("renew is capped by max_ttl", func(t *testing.T) {
+		_, err := logical.Write("gitlab/config", map[string]any{"max_ttl": "2h"})
+		require.NoError(t, err)
+
+		t.Cleanup(func() {
+			_, _ = logical.Write("gitlab/config", map[string]any{"max_ttl": "168h"})
+		})
+
+		resp, err := logical.Write("gitlab/token", map[string]any{"id": 13, "name": "renewable", "scopes": "api", "ttl": "10m"})
+		require.NoError(t, err)
+
+		renewed, err := sys.RenewWithContext(ctx, resp.LeaseID, 3600)
+		require.NoError(t, err)
+		assert.Equal(t, 3600, renewed.LeaseDuration)
+
+		renewed, err = sys.RenewWithContext(ctx, resp.LeaseID, 5*3600)
+		require.NoError(t, err)
+		assert.LessOrEqual(t, renewed.LeaseDuration, 2*3600)
+
+		_, err = logical.Write("gitlab/token", map[string]any{"id": 13, "name": "too-long", "scopes": "api", "ttl": "3h"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "exceeds configured maximum ttl")
+	})
+
+	t.Run("role token is leased", func(t *testing.T) {
+		_, err := logical.Write("gitlab/roles/leased", map[string]any{
+			"id": 14, "name": "role-leased", "scopes": "read_api", "token_ttl": "15m",
+		})
+		require.NoError(t, err)
+
+		resp, err := logical.Write("gitlab/token/leased", nil)
+		require.NoError(t, err)
+		assert.Equal(t, 900, resp.LeaseDuration)
+
+		key := fmt.Sprintf("14/%s", resp.Data["id"])
+		require.NoError(t, sys.RevokeWithContext(ctx, resp.LeaseID))
+		require.Eventually(t, func() bool { return gitlab.isRevoked(key) }, 10*time.Second, 100*time.Millisecond)
+	})
+
+	t.Run("revocation of an already deleted token succeeds", func(t *testing.T) {
+		resp, err := logical.Write("gitlab/token", map[string]any{"id": 15, "name": "gone", "scopes": "api", "ttl": "1h"})
+		require.NoError(t, err)
+
+		// simulate someone deleting it in GitLab first
+		gitlab.mu.Lock()
+		gitlab.active[fmt.Sprintf("15/%s", resp.Data["id"])] = false
+		gitlab.mu.Unlock()
+
+		require.NoError(t, sys.RevokeWithContext(ctx, resp.LeaseID))
+
+		_, err = sys.LookupWithContext(ctx, resp.LeaseID)
+		require.Error(t, err, "lease must be gone")
 	})
 
 	t.Run("token via dynamic project_id/name path", func(t *testing.T) {
@@ -412,7 +566,7 @@ func TestVault(t *testing.T) {
 
 		resp, err = logical.List("gitlab/roles")
 		require.NoError(t, err)
-		assert.Equal(t, []any{"ci"}, resp.Data["keys"])
+		assert.Contains(t, resp.Data["keys"], "ci")
 
 		resp, err = logical.Write("gitlab/token/ci", nil)
 		require.NoError(t, err)
@@ -616,5 +770,16 @@ path "gitlab/dynamic/project_id/{{identity.entity.aliases.%[1]s.metadata.project
 		require.NoError(t, json.NewDecoder(raw.Body).Decode(&spec))
 		assert.Contains(t, spec.Paths, "/gitlab/config")
 		assert.Contains(t, spec.Paths, "/gitlab/dynamic/project_id/{id}/name/{name}")
+	})
+
+	t.Run("disabling the mounts revokes every outstanding token", func(t *testing.T) {
+		require.Positive(t, gitlab.activeCount()+other.activeCount())
+
+		for _, mount := range []string{"gitlab", "gitlab-b", "gitlab-unversioned"} {
+			require.NoError(t, sys.UnmountWithContext(ctx, mount))
+		}
+
+		assert.Zero(t, gitlab.activeCount(), "tokens left in GitLab")
+		assert.Zero(t, other.activeCount(), "tokens left in GitLab")
 	})
 }

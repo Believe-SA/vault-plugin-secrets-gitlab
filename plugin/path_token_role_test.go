@@ -54,7 +54,7 @@ func TestAccRoleToken(t *testing.T) {
 		assert.NotEmpty(t, resp.Data["token"], "no token returned")
 		assert.NotEmpty(t, resp.Data["id"], "no id returned")
 		assert.NotEmpty(t, resp.Data["access_level"], "no access_level returned")
-		assert.NotEmpty(t, resp.Data["expires_at"], "default is 1d for expires_at")
+		assert.NotEmpty(t, resp.Data["expires_at"], "a gitlab backstop expiry is always set")
 
 		// check for default value
 		assert.Equal(t, gitlab.AccessLevelValue(40), resp.Data["access_level"])
@@ -78,7 +78,7 @@ func TestAccRoleToken(t *testing.T) {
 		assert.NotEmpty(t, resp.Data["token"], "no token returned")
 		assert.NotEmpty(t, resp.Data["id"], "no id returned")
 		assert.NotEmpty(t, resp.Data["access_level"], "no access_level returned")
-		assert.NotEmpty(t, resp.Data["expires_at"], "default is 1d for expires_at")
+		assert.NotEmpty(t, resp.Data["expires_at"], "a gitlab backstop expiry is always set")
 
 		assert.Equal(t, gitlab.AccessLevelValue(30), resp.Data["access_level"])
 	})
@@ -105,6 +105,7 @@ func testIssueRoleToken(t *testing.T, b logical.Backend, req *logical.Request, r
 	req.Data = data
 
 	resp, err := b.HandleRequest(context.Background(), req)
+	revokeOnCleanup(t, b, req.Storage, resp)
 
 	return resp, err
 }

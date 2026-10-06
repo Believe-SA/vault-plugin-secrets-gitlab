@@ -48,7 +48,7 @@ func envOrDefault(key, d string) string {
 	return env
 }
 
-func envAsInt(key string, def int) int {
+func envAsInt(key string, def int) int { //nolint:unparam
 	v := envOrDefault(key, "")
 
 	val, err := strconv.Atoi(v)

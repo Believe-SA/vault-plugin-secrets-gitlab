@@ -45,8 +45,8 @@ var roleSchema = map[string]*framework.FieldSchema{
 	},
 	"token_ttl": {
 		Type:        framework.TypeDurationSecond,
-		Description: "The TTL of the token",
-		Default:     24 * 3600, // 24 hours, until it hits midnight UTC
+		Description: "Lease duration of the tokens issued for this role. The token is revoked in Gitlab when the lease expires or is revoked",
+		Default:     24 * 3600,
 	},
 	"access_level": {
 		Type:        framework.TypeInt,

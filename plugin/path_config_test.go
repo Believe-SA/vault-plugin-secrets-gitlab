@@ -86,10 +86,11 @@ func TestConfig(t *testing.T) {
 		expected["max_ttl"] = int64(7 * 24 * 3600)
 		testConfigRead(t, backend, reqStorage, expected)
 
-		// Try less than 24 hours
+		// Less than 24 hours is honored: leases are revoked when they end
 		conf["max_ttl"] = fmt.Sprintf("%ds", 12*3600)
-		testConfigUpdate(t, backend, reqStorage, conf, LT24HourTTLWarning("max_ttl"))
+		testConfigUpdate(t, backend, reqStorage, conf)
 
+		expected["max_ttl"] = int64(12 * 3600)
 		testConfigRead(t, backend, reqStorage, expected)
 	})
 
