@@ -39,7 +39,7 @@ jobs:
       - name: Compute next version (Conventional Commits)
         id: next
         if: github.ref == 'refs/heads/main'
-        uses: mathieudutour/github-tag-action@v6.2
+        uses: mathieudutour/github-tag-action@a22cf08638b34d5badda920f9daf6e72c477b07b # v6.2
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           release_branches: main
@@ -74,7 +74,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - uses: goreleaser/goreleaser-action@v7
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           version: "~> v2"
           args: release --clean

@@ -10,7 +10,7 @@
 set -euo pipefail
 
 CONTAINER="${GITLAB_CONTAINER:-vault-plugin-gitlab-ce}"
-IMAGE="${GITLAB_IMAGE:-gitlab/gitlab-ce:19.4.1-ce.0}"
+IMAGE="${GITLAB_IMAGE:-gitlab/gitlab-ce:19.4.1-ce.0@sha256:9b33b45b9f42d176bada85ee5ecb81ddab7e506c435f44cd582206e284b2809c}"
 PORT="${GITLAB_PORT:-8929}"
 URL="http://127.0.0.1:${PORT}"
 # Fixed, throwaway credential: the instance only lives for the test run.

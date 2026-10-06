@@ -32,6 +32,11 @@ const (
 	// expiry. Leases are never allowed to outlive it.
 	gitlabMaxTokenLifetime = 365 * 24 * time.Hour
 
+	// expiryBackstopBuffer is added before computing the GitLab expiry date so
+	// the token always outlives the lease's latest possible end despite
+	// lease-commit latency and clock skew between Vault and the plugin.
+	expiryBackstopBuffer = 5 * time.Minute
+
 	day = 24 * time.Hour
 )
 
@@ -67,9 +72,10 @@ func (b *GitlabBackend) maxLeaseTTL(config *ConfigStorageEntry) time.Duration {
 
 // gitlabExpiry returns the GitLab expires_at backstop for a token issued at
 // now whose lease can last at most maxTTL: the first UTC midnight after the
-// lease's latest possible end.
+// lease's latest possible end, with a small buffer so the token can never
+// expire before a lease that runs right up to its cap.
 func gitlabExpiry(now time.Time, maxTTL time.Duration) time.Time {
-	return now.UTC().Add(maxTTL).Truncate(day).Add(day)
+	return now.UTC().Add(maxTTL + expiryBackstopBuffer).Truncate(day).Add(day)
 }
 
 // issueToken creates a project access token and wraps it in a lease of ttl
@@ -137,7 +143,33 @@ func (b *GitlabBackend) secretTokenRevoke(ctx context.Context, req *logical.Requ
 		return nil, err
 	}
 
-	gc, err := b.revocationClient(ctx, req)
+	config, err := getConfig(ctx, req.Storage)
+	if err != nil {
+		return nil, err
+	}
+
+	if config == nil {
+		// Deconfigured backend: there is no credential to revoke with. Clear
+		// the lease instead of wedging it forever; the GitLab-side expiry
+		// backstop reclaims the token.
+		b.Logger().Warn("backend not configured at revoke; relying on the token expiry backstop",
+			"project_id", projectID, "token_id", tokenID)
+
+		return nil, nil
+	}
+
+	// A lease records the base_url it was issued under. If base_url has been
+	// reconfigured since, do NOT contact the old host: that would hand the
+	// current parent token to whoever controls the stale hostname. Skip the
+	// remote call and let the GitLab-side expiry backstop reclaim the token.
+	if issuer, _ := req.Secret.InternalData["base_url"].(string); issuer != "" && issuer != config.BaseURL {
+		b.Logger().Warn("lease was issued by a different gitlab instance; skipping remote revocation, the token expires at its backstop date",
+			"issuer", issuer, "configured", config.BaseURL, "project_id", projectID, "token_id", tokenID)
+
+		return nil, nil
+	}
+
+	gc, err := b.getClient(ctx, req.Storage)
 	if err != nil {
 		return nil, fmt.Errorf("failed to obtain gitlab client: %w", err)
 	}
@@ -151,25 +183,6 @@ func (b *GitlabBackend) secretTokenRevoke(ctx context.Context, req *logical.Requ
 	}
 
 	return nil, nil
-}
-
-// revocationClient returns a client for the GitLab instance that issued the
-// lease's token, authenticated with the currently configured parent token.
-func (b *GitlabBackend) revocationClient(ctx context.Context, req *logical.Request) (Client, error) { //nolint:ireturn
-	issuer, _ := req.Secret.InternalData["base_url"].(string)
-
-	config, err := getConfig(ctx, req.Storage)
-	if err != nil {
-		return nil, err
-	}
-
-	if issuer == "" || config == nil || issuer == config.BaseURL {
-		return b.getClient(ctx, req.Storage)
-	}
-
-	b.Logger().Debug("revoking against the issuing gitlab instance", "base_url", issuer)
-
-	return b.newClient(&ConfigStorageEntry{BaseURL: issuer, Token: config.Token})
 }
 
 // internalInt reads an integer from lease internal data, which comes back

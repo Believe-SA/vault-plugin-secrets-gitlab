@@ -275,7 +275,7 @@ func TestTokenRevoke(t *testing.T) {
 		assert.Equal(t, [][2]int64{{42, 42}}, mock.revoked)
 	})
 
-	t.Run("revokes against the issuing instance after base_url changes", func(t *testing.T) {
+	t.Run("stale issuer: revocation is skipped, parent token never sent to old URL", func(t *testing.T) {
 		t.Parallel()
 
 		b, s, mock := newLeaseBackend(t, nil)
@@ -299,12 +299,27 @@ func TestTokenRevoke(t *testing.T) {
 		require.NoError(t, err)
 
 		_, err = b.HandleRequest(context.Background(), secretRequest(logical.RevokeOperation, s, roundTrip(t, resp.Secret)))
-		require.NoError(t, err)
+		require.NoError(t, err, "the lease must clear (the GitLab backstop reclaims the token)")
 
-		require.Len(t, built, 1)
-		assert.Equal(t, "https://my.gitlab.com", built[0].BaseURL, "must revoke where the token was issued")
-		assert.Equal(t, "new-token", built[0].Token)
-		assert.Equal(t, [][2]int64{{3, 3}}, mock.revoked)
+		for _, c := range built {
+			assert.NotEqual(t, "https://my.gitlab.com", c.BaseURL, "no client may be built for the stale issuer")
+		}
+
+		assert.Empty(t, mock.revoked, "no revocation call may reach the old instance")
+	})
+
+	t.Run("deconfigured backend: lease clears without wedging", func(t *testing.T) {
+		t.Parallel()
+
+		b, s, mock := newLeaseBackend(t, nil)
+		resp := createToken(t, b, s, pathPatternToken, map[string]any{"id": 4, "name": "x", "scopes": "api"})
+		require.False(t, resp.IsError(), resp.Error())
+
+		require.NoError(t, s.Delete(context.Background(), pathPatternConfig))
+
+		_, err := b.HandleRequest(context.Background(), secretRequest(logical.RevokeOperation, s, roundTrip(t, resp.Secret)))
+		require.NoError(t, err)
+		assert.Empty(t, mock.revoked)
 	})
 
 	t.Run("gitlab failure is returned so vault retries", func(t *testing.T) {

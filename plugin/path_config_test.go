@@ -94,6 +94,29 @@ func TestConfig(t *testing.T) {
 		testConfigRead(t, backend, reqStorage, expected)
 	})
 
+	t.Run("base_url scheme validation", func(t *testing.T) {
+		t.Parallel()
+
+		backend, reqStorage := getTestBackend(t, true)
+
+		// plain http to a non-loopback host must be rejected: the parent token
+		// would transit in cleartext
+		resp, err := backend.HandleRequest(context.Background(), &logical.Request{
+			Operation: logical.UpdateOperation,
+			Path:      pathPatternConfig,
+			Data:      map[string]any{"base_url": "http://gitlab.example.com", "token": "t"},
+			Storage:   reqStorage,
+		})
+		require.NoError(t, err)
+		require.True(t, resp.IsError())
+		assert.Contains(t, resp.Error().Error(), "plain http is only allowed for loopback")
+
+		// loopback http (dev / CI) and https are both fine
+		for _, u := range []string{"http://localhost:8080", "http://127.0.0.1:8929", "http://[::1]:80", "https://gitlab.example.com"} {
+			testConfigUpdate(t, backend, reqStorage, map[string]any{"base_url": u, "token": "t"})
+		}
+	})
+
 	t.Run("allow_owner_level", func(t *testing.T) {
 		t.Parallel()
 

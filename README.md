@@ -95,7 +95,7 @@ max_ttl              2592000
 
 | Field | Default | Description |
 |---|---|---|
-| `base_url` | `https://gitlab.com` | GitLab instance URL |
+| `base_url` | `https://gitlab.com` | GitLab instance URL. Must be `https` (plain `http` is only accepted for loopback addresses) so the parent token never transits in cleartext |
 | `token` | — | Parent token; write-only, never returned |
 | `max_ttl` | `0` (mount max lease TTL) | Maximum lease duration of a token, renewals included. Sub-day values are honored |
 | `allow_owner_level` | `false` | Allow `access_level=50` (Owner) |
@@ -107,6 +107,7 @@ Changes take effect immediately on the next request.
 Free-form request — `ttl` is the lease duration (mount default when omitted):
 
 ```text
+# always set access_level: if omitted, GitLab defaults the token to Maintainer (40)
 $ vault write gitlab/token id=1 name=ci-token scopes=api,write_repository access_level=30 ttl=1h
 Key                Value
 ---                -----
@@ -242,10 +243,15 @@ enforces the real TTL through Vault instead:
    which is always covered by the GitLab backstop.
 
 The returned `expires_at` is that GitLab backstop; `lease_duration` is the
-effective lifetime. Revocation always targets the GitLab instance that issued
-the token, with the currently configured parent token, and a token already
-gone from GitLab counts as revoked. If GitLab is unreachable, Vault retries the
-revocation with backoff.
+effective lifetime. A token already gone from GitLab counts as revoked, and if
+GitLab is unreachable, Vault retries the revocation with backoff.
+
+Revocation only calls GitLab while the lease's issuing `base_url` still matches
+the configured one. If you reconfigure `base_url`, leases issued under the old
+URL are cleared **without** a remote call (a warning is logged) and those
+tokens live until their backstop date: the plugin will not send the current
+parent token to a historical URL. Revoke outstanding leases
+(`vault lease revoke -prefix gitlab/`) *before* switching instances.
 
 ### Upgrading from 0.x (breaking changes)
 

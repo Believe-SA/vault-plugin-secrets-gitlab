@@ -8,14 +8,18 @@ on:
 
 permissions:
   contents: read
+
 jobs:
-  SAST:
-    name: SAST
+  semgrep:
+    name: Semgrep
     runs-on: ubuntu-latest
+    # The official Semgrep image, pinned by digest (the previously used
+    # returntocorp/semgrep-action is archived and unmaintained).
+    container:
+      image: semgrep/semgrep:1.179.0@sha256:93963d9295a366f59e4850127b1550400ee7b388f04fe144e4a1f6325d96e01b
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-      - name: semgrep
-        uses: returntocorp/semgrep-action@v1
+      - uses: actions/checkout@v6
         with:
-          publishToken: ${{ secrets.SEMGREP_KEY }}
+          persist-credentials: false
+      - name: Semgrep scan
+        run: semgrep scan --config p/default --error --metrics=off

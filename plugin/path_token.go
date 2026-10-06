@@ -48,7 +48,7 @@ var accessTokenSchema = map[string]*framework.FieldSchema{
 	},
 	"access_level": {
 		Type:        framework.TypeInt,
-		Description: "access level of project access token",
+		Description: "access level of project access token (10/20/30/40, 50 with allow_owner_level). If omitted, GitLab applies its own default, Maintainer (40) - grant deliberately",
 	},
 }
 

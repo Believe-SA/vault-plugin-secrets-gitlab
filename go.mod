@@ -2,6 +2,10 @@ module github.com/splunk/vault-plugin-secrets-gitlab
 
 go 1.26.0
 
+// Pin the exact toolchain: release binaries and the govulncheck gate must
+// build with a patched stdlib, not the minimum the go directive allows.
+toolchain go1.26.8
+
 require (
 	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/hashicorp/go-hclog v1.6.3

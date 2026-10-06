@@ -31,7 +31,7 @@ func TestPathRole(t *testing.T) {
 	backend, storage := getTestBackend(t, false)
 
 	conf := map[string]any{
-		"base_url": "http://randomhost",
+		"base_url": "https://randomhost",
 		"token":    "gibberish",
 	}
 	testConfigUpdate(t, backend, storage, conf)
@@ -127,7 +127,7 @@ func TestPathRoleWithAllowOwnerAccessLevel(t *testing.T) {
 	backend, storage := getTestBackend(t, false)
 
 	conf := map[string]any{
-		"base_url":          "http://randomhost",
+		"base_url":          "https://randomhost",
 		"token":             "gibberish",
 		"allow_owner_level": true,
 	}
@@ -169,7 +169,7 @@ func TestPathRoleList(t *testing.T) {
 
 	backend, storage := getTestBackend(t, false)
 	conf := map[string]any{
-		"base_url": "http://randomhost",
+		"base_url": "https://randomhost",
 		"token":    "gibberish",
 	}
 	testConfigUpdate(t, backend, storage, conf)
