@@ -1,156 +1,258 @@
-# Vault Plugin for Gitlab Project Access Token
+# vault-plugin-secrets-gitlab
 
-[![build-status-badge]][actions-page]
-[![go-report-card-badge]][go-report-card]
-[![codecov-badge]][codecov]
-![go-version-badge]
+[![CI](https://github.com/Believe-SA/vault-plugin-secrets-gitlab/actions/workflows/ci.yml/badge.svg)](https://github.com/Believe-SA/vault-plugin-secrets-gitlab/actions/workflows/ci.yml)
+[![Release](https://github.com/Believe-SA/vault-plugin-secrets-gitlab/actions/workflows/release.yml/badge.svg)](https://github.com/Believe-SA/vault-plugin-secrets-gitlab/actions/workflows/release.yml)
+[![Latest release](https://img.shields.io/github/v/release/Believe-SA/vault-plugin-secrets-gitlab?sort=semver&logo=github)](https://github.com/Believe-SA/vault-plugin-secrets-gitlab/releases/latest)
+[![Go version](https://img.shields.io/github/go-mod/go-version/Believe-SA/vault-plugin-secrets-gitlab?logo=go)](go.mod)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-This is a backend plugin to be used with Vault. This plugin generates [Gitlab Project Access Tokens][pat]
+**Vault compatibility** — the compiled plugin is registered, mounted and exercised inside a real Vault server in CI:
 
-- [Requirements](#requirements)
-- [Getting Started](#getting-started)
-  - [Usage](#usage)
-- [Design Principles](#design-principles)
-- [Development](#development)
-- [Contribution](#contribution)
-- [License](#license)
+| Vault | Status |
+|---|---|
+| 2.1.x | [![](https://img.shields.io/github/actions/workflow/status/Believe-SA/vault-plugin-secrets-gitlab/ci.yml?job=Vault+2.1.1&label=2.1.1)](https://github.com/Believe-SA/vault-plugin-secrets-gitlab/actions/workflows/ci.yml) |
+| 2.0.x | [![](https://img.shields.io/github/actions/workflow/status/Believe-SA/vault-plugin-secrets-gitlab/ci.yml?job=Vault+2.0.4&label=2.0.4)](https://github.com/Believe-SA/vault-plugin-secrets-gitlab/actions/workflows/ci.yml) |
+| 1.21.x | [![](https://img.shields.io/github/actions/workflow/status/Believe-SA/vault-plugin-secrets-gitlab/ci.yml?job=Vault+1.21.4&label=1.21.4)](https://github.com/Believe-SA/vault-plugin-secrets-gitlab/actions/workflows/ci.yml) |
+| latest GA | [![](https://img.shields.io/github/actions/workflow/status/Believe-SA/vault-plugin-secrets-gitlab/ci.yml?job=Vault+latest&label=latest)](https://github.com/Believe-SA/vault-plugin-secrets-gitlab/actions/workflows/ci.yml) |
+
+**Platforms** — cross-compiled in CI and published on every release: linux, darwin, freebsd, openbsd, windows × amd64, arm64.
+
+A Vault secrets engine that issues [GitLab project access tokens][pat] on demand:
+
+- Tokens are minted through the GitLab API from a single parent token held by Vault
+- Free-form requests (`token`, `dynamic/project_id/<id>/name/<name>`) or predefined **roles** (`token/<role>`)
+- Scopes, access level (guest → maintainer, owner opt-in) and expiry, bounded by a mount-wide `max_ttl`
+- Access gated by standard Vault ACLs
+- Multiplexed, versioned plugin: register it in the catalog with `-version` and pin mounts to a release
+
+Forked from [splunk/vault-plugin-secrets-gitlab](https://github.com/splunk/vault-plugin-secrets-gitlab) and kept in sync with upstream.
 
 ## Requirements
 
-- Gitlab instance with **13.10** or later for API compatibility
-- You need **14.1** or later to have access level
-- Self-managed instances on Free and above. Or, GitLab SaaS Premium and above
-- a token of a user with maintainer or higher permission in a project
+- GitLab **14.1** or later (project access tokens with access level)
+- Self-managed instances on Free and above, or GitLab SaaS Premium and above
+- A parent token of a user with Maintainer (or higher) permission on the target projects
+- Ideally, lift the API rate limit for that user — see [allow specific users to bypass authenticated request rate limiting][lift rate limit]
 
-- Lifting API rate limit for the user whose token will be used in this plugin to generate/revoke project access tokens. Admin of self-hosted can check [this doc][lift rate limit] to allow specific users to bypass authenticated request rate limiting. For SaaS Gitlab, I have not confirmed how to lift API limit yet.
+## Install (pre-built binary)
 
-## Getting Started
+1. Download the asset matching your Vault server from the
+   [latest release](https://github.com/Believe-SA/vault-plugin-secrets-gitlab/releases/latest),
+   e.g. `vault-plugin-secrets-gitlab_<version>_linux_amd64`, together with
+   `checksums.txt`.
 
-This is a [Vault plugin] meant to work with Vault. This guide assumes you have already installed
-Vault and have a basic understanding of how Vault works.
+2. Verify and install it into Vault's `plugin_directory` under the plugin's
+   command name:
 
-Otherwise, first read [how to get started with Vault][vault-getting-started].
+   ```bash
+   sha256sum --ignore-missing -c checksums.txt
+   install -m 0755 vault-plugin-secrets-gitlab_<version>_linux_amd64 \
+     /etc/vault/plugins/vault-plugin-secrets-gitlab
+   ```
 
-To learn specifically about how plugins work, see documentation on [Vault
-plugins][vault plugin].
+3. Register the plugin and enable the secrets engine:
+
+   ```bash
+   SHASUM=$(sha256sum /etc/vault/plugins/vault-plugin-secrets-gitlab | cut -d ' ' -f1)
+   vault plugin register -sha256="$SHASUM" -version="v<version>" \
+     secret vault-plugin-secrets-gitlab
+   vault secrets enable -path=gitlab -plugin-version="v<version>" vault-plugin-secrets-gitlab
+   ```
+
+   `-version` is optional — without it Vault records the version the binary
+   reports. When given, it **must** match the binary (`v` + the release
+   version) or Vault refuses the registration. Pinning the version lets you
+   upgrade mount by mount with `vault secrets tune -plugin-version=... gitlab/`
+   followed by `vault plugin reload -mounts=gitlab/`.
+
+Check a binary's build metadata at any time with
+`vault-plugin-secrets-gitlab --version`.
+
+### Setup
+
+Configure the mount with the parent token used to mint project access tokens:
+
+```text
+$ vault write gitlab/config \
+    base_url="https://gitlab.example.com" \
+    token="$GITLAB_TOKEN" \
+    max_ttl=720h
+Key                  Value
+---                  -----
+allow_owner_level    false
+base_url             https://gitlab.example.com
+max_ttl              2592000
+```
+
+| Field | Default | Description |
+|---|---|---|
+| `base_url` | `https://gitlab.com` | GitLab instance URL |
+| `token` | — | Parent token; write-only, never returned |
+| `max_ttl` | `0` (unbounded) | Upper bound for any requested `expires_at`; values below 24h are ignored |
+| `allow_owner_level` | `false` | Allow `access_level=50` (Owner) |
+
+Changes take effect immediately on the next request.
 
 ### Usage
 
-```sh
-# Please mount a plugin, then you can enable a secret
-$ vault secrets enable -path=gitlab vault-plugin-secrets-gitlab
-Success! Enabled the vault-plugin-secrets-gitlab secrets engine at: gitlab/
+Free-form request:
 
-# configure the /config backend. You must supply a token which can generate project access tokens
-$ vault write gitlab/config base_url="https://gitlab.example.com" token=$GITLAB_TOKEN 
-
-# see supported paths
-$ vault path-help gitlab/
-$ vault path-help gitlab/config
-
-# generate an ephemeral gitlab token
-$ vault write gitlab/token id=1 name=ci-token scopes=api,write_repository
-Key           Value
----           -----
-id            12345
-name          ci-token
-scopes        [api write_repository]
-token         REDACTED_TOKEN
-
-# create a role
-$ vault write gitlab/roles/ci-role id=1 name=project1-role scopes=read_api,read_repository
-Key           Value
----           -----
-role_name     ci-role
-id            1
-name          project1-role
-scopes        [read_api read_repository]
-token_ttl     86400s
-
-# generate an ephemeral gitlab token for ci-role
-$ vault write gitlab/token/ci-role
-Key           Value
----           -----
-id            12346
-name          project1-role
-scopes        [read_api read_repository]
-token         REDACTED_TOKEN
-expires_at    2021-09-13
+```text
+$ vault write gitlab/token id=1 name=ci-token scopes=api,write_repository access_level=30 expires_at=2026-12-31T00:00:00Z
+Key             Value
+---             -----
+access_level    30
+expires_at      2026-12-31 00:00:00 +0000 UTC
+id              12345
+name            ci-token
+scopes          [api write_repository]
+token           glpat-REDACTED
 ```
 
-## Design Principles
+The project and token name can also be carried by the path, which makes it
+easy to scope ACL policies per project:
 
-The Gitlab Vault secrets plugin dynamically generates gitlab project access token based on passed parameters. This enables users to gain access to Gitlab projects without needing to create or manage project access tokens manually.
+```text
+$ vault write gitlab/dynamic/project_id/1/name/ci-token scopes=read_api
+```
 
-You can find [detail design principles](docs/design-principles.md)
+```hcl
+# only project 1, any token name
+path "gitlab/dynamic/project_id/1/name/*" {
+  capabilities = ["create", "update"]
+}
+```
 
-## Development
+Roles predefine the parameters, so callers cannot choose them:
 
-## Full dev environment
+```text
+$ vault write gitlab/roles/ci-role id=1 name=project1-role scopes=read_api,read_repository token_ttl=48h
+$ vault write -f gitlab/token/ci-role
+Key             Value
+---             -----
+access_level    40
+expires_at      2026-10-08 00:00:00 +0000 UTC
+id              12346
+name            project1-role
+scopes          [read_api read_repository]
+token           glpat-REDACTED
+```
 
-To be coming...
+See `vault path-help gitlab/` for every endpoint, and the
+[design principles](docs/design-principles.md) for access-control guidance.
 
-TODO: spin up a gitlab instance in docker
+> GitLab project access tokens have day granularity (they expire at midnight
+> UTC), so the shortest effective lifetime is about one day.
 
-## Developing with an existing Gitlab instance
+## Local Development
 
-Requirements:
+### Build and run in Docker
 
-- vault
+```bash
+docker build -t vault-plugin-gitlab .
+docker run --rm -d --cap-add=IPC_LOCK -e 'VAULT_DEV_ROOT_TOKEN_ID=root' \
+  -e 'VAULT_DEV_LISTEN_ADDRESS=0.0.0.0:8200' -p 8200:8200 vault-plugin-gitlab
 
-```sh
-# Build binary in plugins directory, and spin up dev vault
+export VAULT_ADDR='http://127.0.0.1:8200'
+vault login root
+
+# Hash the binary *inside* the container — that is the file Vault checks.
+CID=$(docker ps -q --filter ancestor=vault-plugin-gitlab | head -1)
+SHASUM=$(docker exec "$CID" sha256sum /vault/plugins/vault-plugin-secrets-gitlab | cut -d ' ' -f1)
+vault plugin register -sha256="$SHASUM" secret vault-plugin-secrets-gitlab
+vault secrets enable -path=gitlab vault-plugin-secrets-gitlab
+vault write gitlab/config base_url="$GITLAB_URL" token="$GITLAB_TOKEN"
+```
+
+### Build and run with a local Vault
+
+```bash
+# builds into ./plugins and starts `vault server -dev -dev-plugin-dir=./plugins`
 make vault-only
 
-# In New Terminal
-export VAULT_ADDR=http://localhost:8200
-export GITLAB_URL="https://gitlab.example.com"
-export GITLAB_TOKEN=TOKEN
-
-
-# enable secrets backend and configuration
+# in another terminal
+export VAULT_ADDR=http://127.0.0.1:8200 GITLAB_URL=https://gitlab.example.com GITLAB_TOKEN=...
 ./scripts/setup_dev_vault.sh
 ```
 
-You can then issue a project access following above usage.
-
 ### Tests
 
-```sh
-# run unit tests
-make test
+Unit tests run with no external dependencies:
 
-# run subset of tests
+```bash
+make test                          # all unit tests, with coverage in coverage/unit
 make test TESTARGS='-run=TestConfig'
-
-# run acceptance tests (uses Vault and Gitlab Docker containers against the compiled plugin)
-make acc-test
-
-# generate a code coverage report
-make report
-open coverage.html
-
+make report                        # coverage/coverage.html
 ```
+
+Vault integration tests build the plugin, start a real `vault server -dev`,
+register it in the catalog (sha256 + version), mount it, and drive every
+endpoint against a fake GitLab API — including version pinning, multiplexed
+mounts and plugin reload. The Vault binary is downloaded into `.tools/`:
+
+```bash
+make test-vault                        # latest GA Vault
+make test-vault VAULT_VERSION=2.0.4    # a specific release
+VAULT_BIN=$(which vault) go test ./integration -v   # your own binary
+```
+
+Acceptance tests mint real tokens against a live GitLab instance. They run
+when `-short` is not set and need:
+
+```bash
+export GITLAB_URL=https://gitlab.example.com
+export GITLAB_TOKEN=<parent token>
+export GITLAB_PROJECT_ID=<project id>
+go test ./plugin -run TestAcc -v
+```
+
+In CI these use the `GITLAB_URL`, `GITLAB_TOKEN` and `GITLAB_PROJECT_ID`
+repository secrets and are skipped when they are not set (and never run for
+pull requests from forks).
+
+Lint with `make lint` (golangci-lint, config in `.golangci.yml`).
+
+### Releases
+
+Releases are automated. Every push to `main` is analyzed with
+[Conventional Commits](https://www.conventionalcommits.org/): the next
+[semver](https://semver.org/) is derived from the commit types since the last
+tag, the tag is created, and [GoReleaser](https://goreleaser.com) publishes the
+cross-compiled binaries and `checksums.txt` to a GitHub Release. The release
+version is stamped into the binary and reported to Vault as the plugin version.
+
+| Commit prefix | Version bump |
+| --- | --- |
+| `fix:` | patch (`x.y.Z`) |
+| `feat:` | minor (`x.Y.0`) |
+| `feat!:` / `fix!:` / `BREAKING CHANGE:` footer | major (`X.0.0`) |
+| `docs:`, `chore:`, `ci:`, `refactor:`, `test:`, `style:`, `build:` | no release |
+
+You can also cut a release at any specific version by pushing a `v*` tag
+directly (e.g. `git tag v1.0.0 && git push origin v1.0.0`) — that builds and
+publishes that exact tag. Build every artifact locally without publishing with
+`make release-snapshot`.
+
+### Syncing with upstream
+
+```bash
+git remote add upstream https://github.com/splunk/vault-plugin-secrets-gitlab.git
+git fetch upstream && git merge upstream/main
+```
+
+The Go module path is kept as `github.com/splunk/vault-plugin-secrets-gitlab`
+to keep upstream merges conflict-free.
 
 ## Contribution
 
-This plugin was initially created as Hackathon project to enahance ephemeral credential suite. Another example is [vault-plugin-secrets-artifactory]. Contribution in a form of `issue`, `merge request` and donation will always be welcome.
+This plugin was initially created as a Hackathon project to enhance the ephemeral credential suite. Another example is [vault-plugin-secrets-artifactory]. Contributions in the form of issues and pull requests are welcome.
 
-Please refer [CONTRIBUTING.md](CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) before contributing.
+Please refer to [CONTRIBUTING.md](CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) before contributing.
 
 ## License
 
 [Apache Software License version 2.0](LICENSE)
 
-[pat]: https://docs.gitlab.com/ee/user/project/settings/project_access_tokens.html
-[lift rate limit]: https://docs.gitlab.com/ee/user/admin_area/settings/user_and_ip_rate_limits.html#allow-specific-users-to-bypass-authenticated-request-rate-limiting
+[pat]: https://docs.gitlab.com/user/project/settings/project_access_tokens/
+[lift rate limit]: https://docs.gitlab.com/administration/settings/user_and_ip_rate_limits/#allow-specific-users-to-bypass-authenticated-request-rate-limiting
 [vault-plugin-secrets-artifactory]: https://github.com/splunk/vault-plugin-secrets-artifactory
-[vault plugin]:https://www.vaultproject.io/docs/internals/plugins.html
-[vault-getting-started]:https://www.vaultproject.io/intro/getting-started/install.html
-[actions-page]:https://github.com/splunk/vault-plugin-secrets-gitlab/actions
-[build-status-badge]:https://github.com/splunk/vault-plugin-secrets-gitlab/workflows/test.yml/badge.svg
-[codecov]:https://codecov.io/gh/splunk/vault-plugin-secrets-gitlab
-[codecov-badge]:https://codecov.io/gh/splunk/vault-plugin-secrets-gitlab/branch/main/graph/badge.svg
-[go-report-card]:https://goreportcard.com/report/github.com/splunk/vault-plugin-secrets-gitlab
-[go-report-card-badge]:https://goreportcard.com/badge/github.com/splunk/vault-plugin-secrets-gitlab
-[go-version-badge]:https://img.shields.io/github/go-mod/go-version/splunk/vault-plugin-secrets-gitlab

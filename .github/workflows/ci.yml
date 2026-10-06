@@ -1,0 +1,120 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify formatting
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - name: Verify go.mod is tidy
+        run: go mod tidy && git diff --exit-code go.mod go.sum
+      - name: Vet
+        run: go vet ./...
+      - name: Build
+        run: go build ./...
+      - name: Unit tests
+        run: make test
+      - name: Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          directory: coverage/unit/
+          flags: unittests
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.14.0
+          args: --timeout 5m
+
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, darwin, freebsd, openbsd, windows]
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Cross-compile
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: go build -o /dev/null .
+
+  vault:
+    # Runs the compiled plugin inside a real Vault dev server: catalog
+    # registration (sha256 + version), version-pinned mounts, multiplexing,
+    # plugin reload and every endpoint against a fake GitLab API.
+    name: Vault ${{ matrix.vault }}
+    runs-on: ubuntu-latest
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        vault:
+          - "1.21.4" # previous major, last 1.x
+          - "2.0.4"
+          - "2.1.1"
+          - latest # newest GA release, catches upcoming breakage early
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Integration tests
+        run: make test-vault VAULT_VERSION=${{ matrix.vault }}
+
+  acceptance:
+    name: Acceptance tests (live GitLab)
+    runs-on: ubuntu-latest
+    needs: test
+    # Never expose secrets to pull requests from forks.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Acceptance tests
+        env:
+          GITLAB_URL: ${{ secrets.GITLAB_URL }}
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          GITLAB_PROJECT_ID: ${{ secrets.GITLAB_PROJECT_ID }}
+        run: |
+          if [ -z "$GITLAB_URL" ] || [ -z "$GITLAB_TOKEN" ] || [ -z "$GITLAB_PROJECT_ID" ]; then
+            echo "GitLab secrets not configured; skipping live acceptance tests."
+            echo "Add GITLAB_URL, GITLAB_TOKEN and GITLAB_PROJECT_ID repository secrets to enable."
+            exit 0
+          fi
+          go test ./plugin/ -run TestAcc -v -count=1
