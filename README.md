@@ -15,7 +15,15 @@
 | 1.21.x | [![](https://img.shields.io/github/actions/workflow/status/Believe-SA/vault-plugin-secrets-gitlab/ci.yml?job=Vault+1.21.4&label=1.21.4)](https://github.com/Believe-SA/vault-plugin-secrets-gitlab/actions/workflows/ci.yml) |
 | latest GA | [![](https://img.shields.io/github/actions/workflow/status/Believe-SA/vault-plugin-secrets-gitlab/ci.yml?job=Vault+latest&label=latest)](https://github.com/Believe-SA/vault-plugin-secrets-gitlab/actions/workflows/ci.yml) |
 
-**Platforms** — cross-compiled in CI and published on every release: linux, darwin, freebsd, openbsd, windows × amd64, arm64.
+**Platforms** — cross-compiled in CI and published on every release:
+
+| OS | amd64 | arm64 |
+|---|---|---|
+| ![linux](https://img.shields.io/badge/linux-FCC624?logo=linux&logoColor=black) | [![](https://img.shields.io/github/actions/workflow/status/Believe-SA/vault-plugin-secrets-gitlab/ci.yml?job=Build+linux%2Famd64&label=amd64)](https://github.com/Believe-SA/vault-plugin-secrets-gitlab/actions/workflows/ci.yml) | [![](https://img.shields.io/github/actions/workflow/status/Believe-SA/vault-plugin-secrets-gitlab/ci.yml?job=Build+linux%2Farm64&label=arm64)](https://github.com/Believe-SA/vault-plugin-secrets-gitlab/actions/workflows/ci.yml) |
+| ![macOS](https://img.shields.io/badge/macOS-000000?logo=apple&logoColor=white) | [![](https://img.shields.io/github/actions/workflow/status/Believe-SA/vault-plugin-secrets-gitlab/ci.yml?job=Build+darwin%2Famd64&label=amd64)](https://github.com/Believe-SA/vault-plugin-secrets-gitlab/actions/workflows/ci.yml) | [![](https://img.shields.io/github/actions/workflow/status/Believe-SA/vault-plugin-secrets-gitlab/ci.yml?job=Build+darwin%2Farm64&label=arm64)](https://github.com/Believe-SA/vault-plugin-secrets-gitlab/actions/workflows/ci.yml) |
+| ![FreeBSD](https://img.shields.io/badge/FreeBSD-AB2B28?logo=freebsd&logoColor=white) | [![](https://img.shields.io/github/actions/workflow/status/Believe-SA/vault-plugin-secrets-gitlab/ci.yml?job=Build+freebsd%2Famd64&label=amd64)](https://github.com/Believe-SA/vault-plugin-secrets-gitlab/actions/workflows/ci.yml) | [![](https://img.shields.io/github/actions/workflow/status/Believe-SA/vault-plugin-secrets-gitlab/ci.yml?job=Build+freebsd%2Farm64&label=arm64)](https://github.com/Believe-SA/vault-plugin-secrets-gitlab/actions/workflows/ci.yml) |
+| ![OpenBSD](https://img.shields.io/badge/OpenBSD-F2CA30?logo=openbsd&logoColor=black) | [![](https://img.shields.io/github/actions/workflow/status/Believe-SA/vault-plugin-secrets-gitlab/ci.yml?job=Build+openbsd%2Famd64&label=amd64)](https://github.com/Believe-SA/vault-plugin-secrets-gitlab/actions/workflows/ci.yml) | [![](https://img.shields.io/github/actions/workflow/status/Believe-SA/vault-plugin-secrets-gitlab/ci.yml?job=Build+openbsd%2Farm64&label=arm64)](https://github.com/Believe-SA/vault-plugin-secrets-gitlab/actions/workflows/ci.yml) |
+| ![Windows](https://img.shields.io/badge/Windows-0078D6?logo=windows&logoColor=white) | [![](https://img.shields.io/github/actions/workflow/status/Believe-SA/vault-plugin-secrets-gitlab/ci.yml?job=Build+windows%2Famd64&label=amd64)](https://github.com/Believe-SA/vault-plugin-secrets-gitlab/actions/workflows/ci.yml) | [![](https://img.shields.io/github/actions/workflow/status/Believe-SA/vault-plugin-secrets-gitlab/ci.yml?job=Build+windows%2Farm64&label=arm64)](https://github.com/Believe-SA/vault-plugin-secrets-gitlab/actions/workflows/ci.yml) |
 
 A Vault secrets engine that issues [GitLab project access tokens][pat] on demand:
 
@@ -138,6 +146,82 @@ scopes          [read_api read_repository]
 token           glpat-REDACTED
 ```
 
+### Templated policies
+
+The `dynamic/project_id/<id>/name/<name>` path carries the project and token
+name in the URL, so a single [templated ACL policy][templated policies] can
+restrict every caller to *its own* project, using identity data instead of one
+policy per project. Both patterns below are exercised against a real Vault in
+the integration tests.
+
+**Per entity** — store the project on the Vault entity and bind the token name
+to the caller:
+
+```bash
+vault policy write gitlab-own-project - <<'EOF'
+# project from the entity metadata, token name = entity name
+path "gitlab/dynamic/project_id/{{identity.entity.metadata.gitlab_project_id}}/name/{{identity.entity.name}}" {
+  capabilities = ["create", "update"]
+}
+EOF
+
+vault write identity/entity name=alice metadata=gitlab_project_id=21 policies=gitlab-own-project
+```
+
+`alice` can now call `vault write gitlab/dynamic/project_id/21/name/alice scopes=read_api`,
+and is denied for any other project, any other token name and the free-form
+`gitlab/token` path. With [identity groups][identity groups] use
+`{{identity.groups.names.<group>.metadata.gitlab_project_id}}` to scope a whole
+team.
+
+**GitLab CI/CD** — each pipeline job authenticates with its
+[ID token][gitlab id tokens] and may only mint tokens for the project it runs in.
+The JWT `project_id` claim is mapped to entity-alias metadata and used in the
+policy:
+
+```bash
+vault auth enable jwt
+vault write auth/jwt/config \
+  oidc_discovery_url="https://gitlab.example.com" \
+  bound_issuer="https://gitlab.example.com"
+
+vault write auth/jwt/role/gitlab-ci - <<'EOF'
+{
+  "role_type": "jwt",
+  "user_claim": "project_id",
+  "bound_audiences": ["https://vault.example.com"],
+  "bound_claims": {"namespace_path": "mygroup"},
+  "claim_mappings": {"project_id": "project_id", "project_path": "project_path"},
+  "token_policies": ["gitlab-ci"],
+  "token_ttl": "10m"
+}
+EOF
+
+ACCESSOR=$(vault auth list -format=json | jq -r '."jwt/".accessor')
+vault policy write gitlab-ci - <<EOF
+path "gitlab/dynamic/project_id/{{identity.entity.aliases.${ACCESSOR}.metadata.project_id}}/name/ci-*" {
+  capabilities = ["create", "update"]
+}
+EOF
+```
+
+```yaml
+# .gitlab-ci.yml
+deploy:
+  id_tokens:
+    VAULT_ID_TOKEN:
+      aud: https://vault.example.com
+  script:
+    - export VAULT_TOKEN=$(vault write -field=token auth/jwt/login role=gitlab-ci jwt=$VAULT_ID_TOKEN)
+    - export GITLAB_TOKEN=$(vault write -field=token gitlab/dynamic/project_id/$CI_PROJECT_ID/name/ci-$CI_JOB_ID scopes=read_api)
+```
+
+`user_claim=project_id` matters: it gives each project its own entity alias,
+so the alias metadata (and therefore the allowed project) cannot be overwritten
+by a job from another project, as it could with a per-user claim such as
+`user_email`. Tighten `bound_claims` (`namespace_path`, `ref_protected`, ...)
+to control which pipelines may log in at all.
+
 See `vault path-help gitlab/` for every endpoint, and the
 [design principles](docs/design-principles.md) for access-control guidance.
 
@@ -187,7 +271,8 @@ make report                        # coverage/coverage.html
 
 Vault integration tests build the plugin, start a real `vault server -dev`,
 register it in the catalog (sha256 + version), mount it, and drive every
-endpoint against a fake GitLab API — including version pinning, multiplexed
+endpoint against a fake GitLab API — including the templated policies
+(entity metadata and a GitLab CI JWT login), version pinning, multiplexed
 mounts and plugin reload. The Vault binary is downloaded into `.tools/`:
 
 ```bash
@@ -263,3 +348,6 @@ Please refer to [CONTRIBUTING.md](CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](CODE
 [pat]: https://docs.gitlab.com/user/project/settings/project_access_tokens/
 [lift rate limit]: https://docs.gitlab.com/administration/settings/user_and_ip_rate_limits/#allow-specific-users-to-bypass-authenticated-request-rate-limiting
 [vault-plugin-secrets-artifactory]: https://github.com/splunk/vault-plugin-secrets-artifactory
+[templated policies]: https://developer.hashicorp.com/vault/docs/concepts/policies#templated-policies
+[identity groups]: https://developer.hashicorp.com/vault/docs/concepts/identity#identity-groups
+[gitlab id tokens]: https://docs.gitlab.com/ci/secrets/id_token_authentication/
