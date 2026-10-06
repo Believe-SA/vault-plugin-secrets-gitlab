@@ -45,6 +45,9 @@ var configSchema = map[string]*framework.FieldSchema{
 	"token": {
 		Type:        framework.TypeString,
 		Description: `gitlab token that has permissions to generate project access tokens`,
+		DisplayAttrs: &framework.DisplayAttributes{
+			Sensitive: true,
+		},
 	},
 	"max_ttl": {
 		Type:        framework.TypeDurationSecond,
@@ -59,8 +62,8 @@ var configSchema = map[string]*framework.FieldSchema{
 	},
 }
 
-func configDetail(config *ConfigStorageEntry) map[string]interface{} {
-	return map[string]interface{}{
+func configDetail(config *ConfigStorageEntry) map[string]any {
+	return map[string]any{
 		"base_url":          config.BaseURL,
 		"max_ttl":           int64(config.MaxTTL / time.Second),
 		"allow_owner_level": config.AllowOwnerLevel,
@@ -164,6 +167,9 @@ func (b *GitlabBackend) pathConfigWrite(ctx context.Context, req *logical.Reques
 		return nil, err
 	}
 
+	// drop the cached client so the new base_url/token take effect immediately
+	b.reset()
+
 	return &logical.Response{
 		Data:     configDetail(config),
 		Warnings: warnings,
@@ -207,7 +213,7 @@ for the backend in general.
 var configExamples = []framework.RequestExample{
 	{
 		Description: "Create/update backend configuration",
-		Data: map[string]interface{}{
+		Data: map[string]any{
 			"base_url":          "https://my.gitlab.com",
 			"token":             "MyPersonalAccessToken",
 			"max_ttl":           "168h",

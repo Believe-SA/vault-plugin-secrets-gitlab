@@ -89,7 +89,7 @@ func (ac *mockGitlabClient) Valid() bool {
 func (ac *mockGitlabClient) CreateProjectAccessToken(tokenStorage *BaseTokenStorageEntry, _ *time.Time) (*PAT, error) {
 	return &PAT{
 		PersonalAccessToken: gitlab.PersonalAccessToken{
-			ID:     tokenStorage.ID,
+			ID:     int64(tokenStorage.ID),
 			Name:   tokenStorage.Name,
 			Token:  "test-token-value",
 			Scopes: tokenStorage.Scopes,

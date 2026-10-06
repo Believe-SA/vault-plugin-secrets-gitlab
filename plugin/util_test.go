@@ -43,8 +43,7 @@ func TestValidateScopes(t *testing.T) {
 		err := validateScopes(invalidScopes)
 		require.Error(t, err, "expecting error")
 
-		var merr *multierror.Error
-		if errors.As(err, &merr) {
+		if merr, ok := errors.AsType[*multierror.Error](err); ok {
 			assert.Len(t, merr.Errors, 2, "expecting %d errors, got %s", 2, len(merr.Errors))
 		}
 

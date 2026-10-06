@@ -34,14 +34,14 @@ func TestConfig(t *testing.T) {
 
 		testConfigRead(t, backend, reqStorage, nil)
 
-		conf := map[string]interface{}{
+		conf := map[string]any{
 			"base_url": "https://my.gitlab.com",
 			"token":    "mytoken",
 		}
 
 		testConfigUpdate(t, backend, reqStorage, conf, NoTTLWarning("max_ttl"))
 
-		expected := map[string]interface{}{
+		expected := map[string]any{
 			"base_url":          "https://my.gitlab.com",
 			"max_ttl":           int64(0),
 			"allow_owner_level": false,
@@ -63,7 +63,7 @@ func TestConfig(t *testing.T) {
 
 		testConfigRead(t, backend, reqStorage, nil)
 
-		conf := map[string]interface{}{
+		conf := map[string]any{
 			"base_url": "https://my.gitlab.com",
 			"token":    "mytoken",
 			"max_ttl":  fmt.Sprintf("%dh", 30*24),
@@ -71,7 +71,7 @@ func TestConfig(t *testing.T) {
 
 		testConfigUpdate(t, backend, reqStorage, conf)
 
-		expected := map[string]interface{}{
+		expected := map[string]any{
 			"base_url":          "https://my.gitlab.com",
 			"max_ttl":           int64(30 * 24 * 3600),
 			"allow_owner_level": false,
@@ -102,7 +102,7 @@ func TestConfig(t *testing.T) {
 
 		// Validating allow_owner_token set to true
 
-		conf := map[string]interface{}{
+		conf := map[string]any{
 			"base_url":          "https://my.gitlab.com",
 			"token":             "mytoken",
 			"max_ttl":           fmt.Sprintf("%dh", 30*24),
@@ -111,7 +111,7 @@ func TestConfig(t *testing.T) {
 
 		testConfigUpdate(t, backend, reqStorage, conf)
 
-		expected := map[string]interface{}{
+		expected := map[string]any{
 			"base_url":          "https://my.gitlab.com",
 			"max_ttl":           int64(30 * 24 * 3600),
 			"allow_owner_level": true,
@@ -129,7 +129,7 @@ func TestConfig(t *testing.T) {
 	})
 }
 
-func testConfigUpdate(t *testing.T, b logical.Backend, s logical.Storage, d map[string]interface{}, warnings ...string) {
+func testConfigUpdate(t *testing.T, b logical.Backend, s logical.Storage, d map[string]any, warnings ...string) {
 	t.Helper()
 
 	resp, err := b.HandleRequest(context.Background(), &logical.Request{
@@ -147,7 +147,7 @@ func testConfigUpdate(t *testing.T, b logical.Backend, s logical.Storage, d map[
 	}
 }
 
-func testConfigRead(t *testing.T, b logical.Backend, s logical.Storage, expected map[string]interface{}) {
+func testConfigRead(t *testing.T, b logical.Backend, s logical.Storage, expected map[string]any) {
 	t.Helper()
 
 	resp, err := b.HandleRequest(context.Background(), &logical.Request{

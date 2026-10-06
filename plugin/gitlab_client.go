@@ -78,6 +78,7 @@ func (gc *GitlabClient) CreateProjectAccessToken(tokenStorage *BaseTokenStorageE
 		Name:   &tokenStorage.Name,
 		Scopes: &tokenStorage.Scopes,
 	}
+
 	if expiresAt != nil {
 		expiration := gitlab.ISOTime(*expiresAt)
 		opt.ExpiresAt = &expiration

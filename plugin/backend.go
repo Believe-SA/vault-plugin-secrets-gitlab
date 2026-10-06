@@ -24,12 +24,19 @@ import (
 	"github.com/hashicorp/vault/sdk/logical"
 )
 
+// Version is the plugin version reported to Vault as the backend RunningVersion.
+// It must be a valid semantic version so that the plugin can be registered in
+// the Vault plugin catalog with or without an explicit `version`. It is
+// overridden at build time via -ldflags.
+var Version = "v0.0.0-dev"
+
 // GitlabBackend is the backend for Gitlab plugin.
 type GitlabBackend struct {
 	*framework.Backend
 
 	view      logical.Storage
 	client    Client
+	newClient func(*ConfigStorageEntry) (Client, error)
 	lock      sync.RWMutex
 	roleLocks []*locksutil.LockEntry
 }
@@ -57,7 +64,7 @@ func (b *GitlabBackend) getClient(ctx context.Context, s logical.Storage) (Clien
 		return nil, err
 	}
 
-	c, err := NewClient(config)
+	c, err := b.newClient(config)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +100,10 @@ func Factory(ctx context.Context, c *logical.BackendConfig) (logical.Backend, er
 // Backend exports the function to create backend and configure.
 func Backend(conf *logical.BackendConfig) *GitlabBackend {
 	backend := &GitlabBackend{
-		view:      conf.StorageView,
+		view: conf.StorageView,
+		newClient: func(config *ConfigStorageEntry) (Client, error) {
+			return NewClient(config)
+		},
 		roleLocks: locksutil.CreateLocks(),
 	}
 
@@ -107,7 +117,8 @@ func Backend(conf *logical.BackendConfig) *GitlabBackend {
 			pathRoleList(backend),
 			pathRoleToken(backend),
 		),
-		Invalidate: backend.invalidate,
+		Invalidate:     backend.invalidate,
+		RunningVersion: Version,
 	}
 
 	return backend
