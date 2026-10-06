@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/http"
 	"testing"
 	"time"
 
@@ -349,4 +350,70 @@ func TestTokenRenew(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, renewed.Secret)
 	assert.Equal(t, 2*time.Hour, renewed.Secret.MaxTTL)
+}
+
+// tokenIsActive asks GitLab whether a token still authenticates.
+func tokenIsActive(t *testing.T, token string) bool {
+	t.Helper()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
+		envOrDefault("GITLAB_URL", "http://localhost")+"/api/v4/personal_access_tokens/self", nil)
+	require.NoError(t, err)
+	req.Header.Set("Private-Token", token)
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+
+	defer resp.Body.Close()
+
+	return resp.StatusCode == http.StatusOK
+}
+
+func TestAccLease(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test (short)")
+	}
+
+	req, backend := newGitlabAccEnv(t)
+
+	// A sub-day TTL must be accepted by GitLab (which rejects expiries before
+	// tomorrow), and the token must stop working once Vault revokes the lease.
+	resp, err := backend.HandleRequest(context.Background(), &logical.Request{
+		Operation: logical.CreateOperation,
+		Path:      pathPatternToken,
+		Storage:   req.Storage,
+		Data: map[string]any{
+			"id":     envAsInt("GITLAB_PROJECT_ID", 1),
+			"name":   "vault-acc-lease",
+			"scopes": []string{"read_api"},
+			"ttl":    "1m",
+		},
+	})
+	require.NoError(t, err)
+	require.False(t, resp.IsError(), resp.Error())
+	require.NotNil(t, resp.Secret)
+	assert.Equal(t, time.Minute, resp.Secret.TTL)
+
+	expiresAt, _ := resp.Data["expires_at"].(time.Time)
+	assert.False(t, expiresAt.Before(time.Now().UTC().Truncate(day).Add(day)), "GitLab expiry must be tomorrow or later")
+
+	token, _ := resp.Data["token"].(string)
+	require.True(t, tokenIsActive(t, token), "freshly issued token must work")
+
+	_, err = backend.HandleRequest(context.Background(), &logical.Request{
+		Operation: logical.RevokeOperation,
+		Storage:   req.Storage,
+		Secret:    roundTrip(t, resp.Secret),
+	})
+	require.NoError(t, err)
+
+	assert.False(t, tokenIsActive(t, token), "revoked token must be rejected by GitLab")
+
+	// Revoking again (e.g. Vault retry) is a no-op.
+	_, err = backend.HandleRequest(context.Background(), &logical.Request{
+		Operation: logical.RevokeOperation,
+		Storage:   req.Storage,
+		Secret:    roundTrip(t, resp.Secret),
+	})
+	require.NoError(t, err)
 }

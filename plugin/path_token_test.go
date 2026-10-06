@@ -48,7 +48,6 @@ func TestAccToken(t *testing.T) {
 		}
 		resp, err := testIssueToken(t, backend, req, d)
 		require.NoError(t, err)
-		fmt.Println(resp.Error()) //nolint:forbidigo
 		require.False(t, resp.IsError())
 
 		assert.NotEmpty(t, resp.Data["token"], "no token returned")
@@ -142,6 +141,10 @@ func TestAccToken(t *testing.T) {
 func testIssueToken(t *testing.T, b logical.Backend, req *logical.Request, data map[string]any) (*logical.Response, error) {
 	t.Helper()
 
+	// copy: parallel subtests share the same request
+	r := *req
+	req = &r
+
 	req.Operation = logical.CreateOperation
 	req.Path = pathPatternToken
 	req.Data = data
@@ -155,6 +158,10 @@ func testIssueToken(t *testing.T, b logical.Backend, req *logical.Request, data 
 // create a token via the flat path (project id and name embedded in the URL).
 func testIssueFlatPathToken(t *testing.T, b logical.Backend, req *logical.Request, id int, name string, data map[string]any) (*logical.Response, error) {
 	t.Helper()
+
+	// copy: parallel subtests share the same request
+	r := *req
+	req = &r
 
 	req.Operation = logical.CreateOperation
 	req.Path = fmt.Sprintf("dynamic/project_id/%d/name/%s", id, name)

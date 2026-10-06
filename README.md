@@ -232,8 +232,11 @@ make test-vault VAULT_VERSION=2.0.4    # a specific release
 VAULT_BIN=$(which vault) go test ./integration -v   # your own binary
 ```
 
-Acceptance tests mint real tokens against a live GitLab instance. They run
-when `-short` is not set and need:
+Acceptance tests mint real project access tokens against a live GitLab. `make
+test-gitlab` starts a disposable GitLab CE container (`scripts/gitlab-ce.sh`,
+about 5 minutes to boot, needs docker), creates an API token and a test
+project, runs them and removes the container. To use an existing instance
+instead:
 
 ```bash
 export GITLAB_URL=https://gitlab.example.com
@@ -242,18 +245,22 @@ export GITLAB_PROJECT_ID=<project id>
 go test ./plugin -run TestAcc -v
 ```
 
-In CI these use the `GITLAB_URL`, `GITLAB_TOKEN` and `GITLAB_PROJECT_ID`
-repository secrets and are skipped when they are not set (and never run for
-pull requests from forks).
+In CI they run against GitLab CE **only as a release gate** (and on demand via
+the "GitLab acceptance" workflow): no tag or release is published if they fail.
 
 Lint with `make lint` (golangci-lint, config in `.golangci.yml`).
+
+Known vulnerabilities are checked with
+[govulncheck](https://go.dev/doc/security/vuln/) on every push, pull request
+and weekly; pull requests also run GitHub dependency review.
 
 ### Releases
 
 Releases are automated. Every push to `main` is analyzed with
 [Conventional Commits](https://www.conventionalcommits.org/): the next
 [semver](https://semver.org/) is derived from the commit types since the last
-tag, the tag is created, and [GoReleaser](https://goreleaser.com) publishes the
+tag, the live GitLab CE acceptance tests run, then the tag is created and
+[GoReleaser](https://goreleaser.com) publishes the
 cross-compiled binaries and `checksums.txt` to a GitHub Release. The release
 version is stamped into the binary and reported to Vault as the plugin version.
 
@@ -266,7 +273,7 @@ version is stamped into the binary and reported to Vault as the plugin version.
 
 You can also cut a release at any specific version by pushing a `v*` tag
 directly (e.g. `git tag v1.0.0 && git push origin v1.0.0`) — that builds and
-publishes that exact tag. Build every artifact locally without publishing with
+publishes that exact tag (after the same acceptance gate). Build every artifact locally without publishing with
 `make release-snapshot`.
 
 ### Syncing with upstream

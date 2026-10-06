@@ -41,6 +41,12 @@ test-vault: .tools/vault-$(VAULT_VERSION)
 #   mkdir -p coverage/int
 # 	@(eval $$(./scripts/init_dev.sh) && go test -parallel=10 -v -covermode=count -cover ./... -run=TestAcc -args -test.gocoverdir="$(shell pwd)/coverage/int")
 
+# Live acceptance tests against a disposable GitLab CE container (~5 min boot).
+test-gitlab:
+	@set -a; eval "$$(./scripts/gitlab-ce.sh up)"; set +a; \
+		go test ./plugin/ -run TestAcc -v -count=1 $(TESTARGS); rc=$$?; \
+		./scripts/gitlab-ce.sh down; exit $$rc
+
 report: .tools/gocover-cobertura
 	mkdir -p coverage
 	# go tool covdata textfmt -i ./coverage/unit,./coverage/int -o coverage/profile
@@ -88,4 +94,4 @@ tools: .tools .tools/docker-compose .tools/gocover-cobertura .tools/golangci-lin
 	curl -fsSL -o .tools/vault-$(VAULT_VERSION).zip https://releases.hashicorp.com/vault/$(VAULT_VERSION)/vault_$(VAULT_VERSION)_$(VAULT_OS)_$(VAULT_ARCH).zip
 	unzip -o -p .tools/vault-$(VAULT_VERSION).zip vault > $@ && chmod +x $@ && rm .tools/vault-$(VAULT_VERSION).zip
 
-.PHONY: all get build build-linux publish lint test test-vault release-snapshot report vault-only dev clean-dev clean-all tools
+.PHONY: all get build build-linux publish lint test test-vault test-gitlab release-snapshot report vault-only dev clean-dev clean-all tools
