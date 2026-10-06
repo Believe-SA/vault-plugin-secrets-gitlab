@@ -96,6 +96,10 @@ func TestAccRoleToken(t *testing.T) {
 func testIssueRoleToken(t *testing.T, b logical.Backend, req *logical.Request, roleName string, data map[string]any) (*logical.Response, error) {
 	t.Helper()
 
+	// copy: parallel subtests share the same request
+	r := *req
+	req = &r
+
 	req.Operation = logical.CreateOperation
 	req.Path = fmt.Sprintf("%s/%s", pathPatternToken, roleName)
 	req.Data = data
