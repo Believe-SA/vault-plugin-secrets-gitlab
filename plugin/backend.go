@@ -45,7 +45,9 @@ func (b *GitlabBackend) getClient(ctx context.Context, s logical.Storage) (Clien
 	b.lock.RLock()
 	unlockFunc := b.lock.RUnlock
 
-	defer func() { unlockFunc() }()
+	// The RWMutex IS released on every path: unlockFunc is reassigned when the
+	// read lock is upgraded to a write lock.
+	defer func() { unlockFunc() }() // nosemgrep: trailofbits.go.missing-runlock-on-rwmutex.missing-runlock-on-rwmutex
 
 	if b.client != nil && b.client.Valid() {
 		return b.client, nil
