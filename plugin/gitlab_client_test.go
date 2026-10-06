@@ -20,6 +20,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	gitlab "gitlab.com/gitlab-org/api/client-go"
 )
 
 func TestNewClientFail(t *testing.T) {
@@ -85,8 +86,16 @@ func (ac *mockGitlabClient) Valid() bool {
 //	func (ac *mockGitlabClient) ListProjectAccessToken(id int) ([]*PAT, error) {
 //		return nil, nil
 //	}
-func (ac *mockGitlabClient) CreateProjectAccessToken(_ *BaseTokenStorageEntry, _ *time.Time) (*PAT, error) {
-	return nil, nil
+func (ac *mockGitlabClient) CreateProjectAccessToken(tokenStorage *BaseTokenStorageEntry, _ *time.Time) (*PAT, error) {
+	return &PAT{
+		PersonalAccessToken: gitlab.PersonalAccessToken{
+			ID:     tokenStorage.ID,
+			Name:   tokenStorage.Name,
+			Token:  "test-token-value",
+			Scopes: tokenStorage.Scopes,
+		},
+		AccessLevel: gitlab.AccessLevelValue(tokenStorage.AccessLevel),
+	}, nil
 }
 
 // func (ac *mockGitlabClient) RevokeProjectAccessToken(tokenStorage *BaseTokenStorageEntry) error {

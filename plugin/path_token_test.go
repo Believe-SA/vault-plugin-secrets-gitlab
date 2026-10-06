@@ -149,3 +149,239 @@ func testIssueToken(t *testing.T, b logical.Backend, req *logical.Request, data 
 
 	return resp, err
 }
+
+// create a token via the flat path (project id and name embedded in the URL)
+func testIssueFlatPathToken(t *testing.T, b logical.Backend, req *logical.Request, id int, name string, data map[string]interface{}) (*logical.Response, error) {
+	t.Helper()
+	req.Operation = logical.CreateOperation
+	req.Path = fmt.Sprintf("dynamic/project_id/%d/name/%s", id, name)
+	req.Data = data
+
+	resp, err := b.HandleRequest(context.Background(), req)
+
+	return resp, err
+}
+
+func TestFlatPathToken(t *testing.T) {
+	t.Parallel()
+
+	t.Run("successfully create", func(t *testing.T) {
+		t.Parallel()
+		backend, storage := getTestBackend(t, true)
+		testConfigUpdate(t, backend, storage, map[string]interface{}{
+			"base_url": "https://my.gitlab.com",
+			"token":    "mytoken",
+		})
+		req := &logical.Request{Storage: storage}
+
+		resp, err := testIssueFlatPathToken(t, backend, req, 1, "MyProjectToken", map[string]interface{}{
+			"scopes": []string{"read_api"},
+		})
+		require.NoError(t, err)
+		require.False(t, resp.IsError())
+
+		assert.Equal(t, "test-token-value", resp.Data["token"])
+		assert.Equal(t, 1, resp.Data["id"])
+		assert.Equal(t, "MyProjectToken", resp.Data["name"])
+	})
+
+	t.Run("successfully create with expiration", func(t *testing.T) {
+		t.Parallel()
+		backend, storage := getTestBackend(t, true)
+		testConfigUpdate(t, backend, storage, map[string]interface{}{
+			"base_url": "https://my.gitlab.com",
+			"token":    "mytoken",
+		})
+		req := &logical.Request{Storage: storage}
+
+		e := time.Now().Add(time.Hour * 24)
+		resp, err := testIssueFlatPathToken(t, backend, req, 1, "MyProjectToken", map[string]interface{}{
+			"scopes":     []string{"read_api"},
+			"expires_at": e.Unix(),
+		})
+		require.NoError(t, err)
+		require.False(t, resp.IsError())
+		assert.Equal(t, "test-token-value", resp.Data["token"])
+	})
+
+	t.Run("successfully create with access level", func(t *testing.T) {
+		t.Parallel()
+		backend, storage := getTestBackend(t, true)
+		testConfigUpdate(t, backend, storage, map[string]interface{}{
+			"base_url": "https://my.gitlab.com",
+			"token":    "mytoken",
+		})
+		req := &logical.Request{Storage: storage}
+
+		resp, err := testIssueFlatPathToken(t, backend, req, 1, "MyProjectToken", map[string]interface{}{
+			"scopes":       []string{"read_api"},
+			"access_level": 30,
+		})
+		require.NoError(t, err)
+		require.False(t, resp.IsError())
+		assert.Equal(t, gitlab.AccessLevelValue(30), resp.Data["access_level"])
+	})
+
+	t.Run("validation failure missing scopes", func(t *testing.T) {
+		t.Parallel()
+		backend, storage := getTestBackend(t, true)
+		testConfigUpdate(t, backend, storage, map[string]interface{}{
+			"base_url": "https://my.gitlab.com",
+			"token":    "mytoken",
+		})
+		req := &logical.Request{Storage: storage}
+
+		resp, err := testIssueFlatPathToken(t, backend, req, 1, "MyProjectToken", map[string]interface{}{})
+		require.NoError(t, err)
+		require.True(t, resp.IsError())
+		assert.Contains(t, resp.Data["error"], "scopes are empty")
+	})
+
+	t.Run("validation failure invalid access level", func(t *testing.T) {
+		t.Parallel()
+		backend, storage := getTestBackend(t, true)
+		testConfigUpdate(t, backend, storage, map[string]interface{}{
+			"base_url": "https://my.gitlab.com",
+			"token":    "mytoken",
+		})
+		req := &logical.Request{Storage: storage}
+
+		resp, err := testIssueFlatPathToken(t, backend, req, 1, "MyProjectToken", map[string]interface{}{
+			"scopes":       []string{"read_api"},
+			"access_level": 25, // not a multiple of 10
+		})
+		require.NoError(t, err)
+		require.True(t, resp.IsError())
+		assert.Contains(t, resp.Data["error"], "invalid access level")
+	})
+
+	t.Run("owner access level denied by default", func(t *testing.T) {
+		t.Parallel()
+		backend, storage := getTestBackend(t, true)
+		testConfigUpdate(t, backend, storage, map[string]interface{}{
+			"base_url": "https://my.gitlab.com",
+			"token":    "mytoken",
+		})
+		req := &logical.Request{Storage: storage}
+
+		resp, err := testIssueFlatPathToken(t, backend, req, 1, "MyProjectToken", map[string]interface{}{
+			"scopes":       []string{"read_api"},
+			"access_level": 50,
+		})
+		require.NoError(t, err)
+		require.True(t, resp.IsError())
+		assert.Contains(t, resp.Data["error"], "access level not permitted")
+	})
+
+	t.Run("owner access level allowed when configured", func(t *testing.T) {
+		t.Parallel()
+		backend, storage := getTestBackend(t, true)
+		testConfigUpdate(t, backend, storage, map[string]interface{}{
+			"base_url":          "https://my.gitlab.com",
+			"token":             "mytoken",
+			"allow_owner_level": true,
+		})
+		req := &logical.Request{Storage: storage}
+
+		resp, err := testIssueFlatPathToken(t, backend, req, 1, "MyProjectToken", map[string]interface{}{
+			"scopes":       []string{"read_api"},
+			"access_level": 50,
+		})
+		require.NoError(t, err)
+		require.False(t, resp.IsError())
+		assert.Equal(t, gitlab.AccessLevelValue(50), resp.Data["access_level"])
+	})
+
+	t.Run("exceeding max token lifetime", func(t *testing.T) {
+		t.Parallel()
+		backend, storage := getTestBackend(t, true)
+		testConfigUpdate(t, backend, storage, map[string]interface{}{
+			"base_url": "https://my.gitlab.com",
+			"token":    "mytoken",
+			"max_ttl":  fmt.Sprintf("%dh", 7*24),
+		})
+		req := &logical.Request{Storage: storage}
+
+		e := time.Now().Add(time.Hour * 14 * 24)
+		resp, err := testIssueFlatPathToken(t, backend, req, 1, "MyProjectToken", map[string]interface{}{
+			"scopes":     []string{"read_api"},
+			"expires_at": e.Unix(),
+		})
+		require.NoError(t, err)
+		require.True(t, resp.IsError())
+		assert.Contains(t, resp.Data["error"], "exceeds configured maximum ttl")
+	})
+
+	t.Run("no config", func(t *testing.T) {
+		t.Parallel()
+		backend, storage := getTestBackend(t, true)
+		req := &logical.Request{Storage: storage}
+
+		resp, err := testIssueFlatPathToken(t, backend, req, 1, "MyProjectToken", map[string]interface{}{
+			"scopes": []string{"read_api"},
+		})
+		require.NoError(t, err)
+		require.True(t, resp.IsError())
+		assert.Contains(t, resp.Data["error"], "GitLab backend configuration has not been set up")
+	})
+}
+
+func TestAccFlatPathToken(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test (short)")
+	}
+	req, backend := newGitlabAccEnv(t)
+
+	ID := envAsInt("GITLAB_PROJECT_ID", 1)
+
+	t.Run("successfully create", func(t *testing.T) {
+		d := map[string]interface{}{
+			"scopes": []string{"read_api"},
+		}
+		resp, err := testIssueFlatPathToken(t, backend, req, ID, "vault-flat-test", d)
+		require.NoError(t, err)
+		require.False(t, resp.IsError())
+
+		assert.NotEmpty(t, resp.Data["token"])
+		assert.NotEmpty(t, resp.Data["id"])
+		assert.Equal(t, "vault-flat-test", resp.Data["name"])
+		assert.Empty(t, resp.Data["expires_at"])
+	})
+
+	t.Run("successfully create with expiration", func(t *testing.T) {
+		e := time.Now().Add(time.Hour * 24)
+		d := map[string]interface{}{
+			"scopes":     []string{"read_api"},
+			"expires_at": e.Unix(),
+		}
+		resp, err := testIssueFlatPathToken(t, backend, req, ID, "vault-flat-test-expires", d)
+		require.NoError(t, err)
+		require.False(t, resp.IsError())
+
+		assert.NotEmpty(t, resp.Data["token"])
+		assert.Contains(t, resp.Data["expires_at"].(time.Time).String(), e.Format("2006-01-02"))
+	})
+
+	t.Run("successfully create with access level", func(t *testing.T) {
+		e := time.Now().Add(time.Hour * 24)
+		d := map[string]interface{}{
+			"scopes":       []string{"read_api"},
+			"access_level": 30,
+			"expires_at":   e.Unix(),
+		}
+		resp, err := testIssueFlatPathToken(t, backend, req, ID, "vault-flat-test-access-level", d)
+		require.NoError(t, err)
+		require.False(t, resp.IsError())
+
+		assert.NotEmpty(t, resp.Data["token"])
+		assert.Equal(t, gitlab.AccessLevelValue(30), resp.Data["access_level"])
+	})
+
+	t.Run("validation failure missing scopes", func(t *testing.T) {
+		t.Parallel()
+		resp, err := testIssueFlatPathToken(t, backend, req, ID, "vault-flat-test-no-scopes", map[string]interface{}{})
+		require.NoError(t, err)
+		require.True(t, resp.IsError())
+		assert.Contains(t, resp.Data["error"], "scopes are empty")
+	})
+}
