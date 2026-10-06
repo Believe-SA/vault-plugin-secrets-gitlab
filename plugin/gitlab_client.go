@@ -24,6 +24,12 @@ import (
 
 const (
 	clientTTL = 30 * time.Minute
+
+	// defaultTokenLifetime is used when no expiry is requested: current GitLab
+	// rejects tokens without expires_at ("expires_at is missing") despite the
+	// API documenting it as optional. It stays within GitLab's default 365-day
+	// maximum lifetime.
+	defaultTokenLifetime = 364 * 24 * time.Hour
 )
 
 // Client makes API calls to GitLab.
@@ -79,10 +85,13 @@ func (gc *GitlabClient) CreateProjectAccessToken(tokenStorage *BaseTokenStorageE
 		Scopes: &tokenStorage.Scopes,
 	}
 
-	if expiresAt != nil {
-		expiration := gitlab.ISOTime(*expiresAt)
-		opt.ExpiresAt = &expiration
+	if expiresAt == nil {
+		def := time.Now().UTC().Add(defaultTokenLifetime)
+		expiresAt = &def
 	}
+
+	expiration := gitlab.ISOTime(*expiresAt)
+	opt.ExpiresAt = &expiration
 
 	if tokenStorage.AccessLevel != 0 {
 		opt.AccessLevel = (*gitlab.AccessLevelValue)(&tokenStorage.AccessLevel)
