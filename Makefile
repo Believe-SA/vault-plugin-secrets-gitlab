@@ -92,6 +92,11 @@ tools: .tools .tools/docker-compose .tools/gocover-cobertura .tools/golangci-lin
 
 .tools/vault-$(VAULT_VERSION): | .tools
 	curl -fsSL -o .tools/vault-$(VAULT_VERSION).zip https://releases.hashicorp.com/vault/$(VAULT_VERSION)/vault_$(VAULT_VERSION)_$(VAULT_OS)_$(VAULT_ARCH).zip
-	unzip -o -p .tools/vault-$(VAULT_VERSION).zip vault > $@ && chmod +x $@ && rm .tools/vault-$(VAULT_VERSION).zip
+	# Verify the download against HashiCorp's published checksums before executing it.
+	curl -fsSL -o .tools/vault-$(VAULT_VERSION).sums https://releases.hashicorp.com/vault/$(VAULT_VERSION)/vault_$(VAULT_VERSION)_SHA256SUMS
+	cd .tools && grep "vault_$(VAULT_VERSION)_$(VAULT_OS)_$(VAULT_ARCH).zip" vault-$(VAULT_VERSION).sums \
+		| sed 's|vault_$(VAULT_VERSION)_$(VAULT_OS)_$(VAULT_ARCH).zip|vault-$(VAULT_VERSION).zip|' \
+		| (sha256sum -c - 2>/dev/null || shasum -a 256 -c -)
+	unzip -o -p .tools/vault-$(VAULT_VERSION).zip vault > $@ && chmod +x $@ && rm .tools/vault-$(VAULT_VERSION).zip .tools/vault-$(VAULT_VERSION).sums
 
 .PHONY: all get build build-linux publish lint test test-vault test-gitlab release-snapshot report vault-only dev clean-dev clean-all tools

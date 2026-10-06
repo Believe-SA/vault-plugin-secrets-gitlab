@@ -17,6 +17,9 @@ package gitlabtoken
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
+	"net/url"
 	"time"
 
 	"github.com/hashicorp/vault/sdk/framework"
@@ -33,7 +36,7 @@ func NoTTLWarning(s string) string {
 var configSchema = map[string]*framework.FieldSchema{
 	"base_url": {
 		Type:        framework.TypeString,
-		Description: `gitlab base url`,
+		Description: `gitlab base url (https required; plain http is only accepted for loopback addresses)`,
 		Default:     "https://gitlab.com",
 	},
 	"token": {
@@ -147,6 +150,11 @@ func (b *GitlabBackend) pathConfigWrite(ctx context.Context, req *logical.Reques
 	// 	config.MaxTTL = time.Duration(configSchema["max_ttl"].Default.(int)) * time.Second
 	// }
 
+	err = validateBaseURL(config.BaseURL)
+	if err != nil {
+		return logical.ErrorResponse("invalid base_url - " + err.Error()), nil
+	}
+
 	entry, err := logical.StorageEntryJSON(pathPatternConfig, config)
 	if err != nil {
 		return nil, err
@@ -164,6 +172,35 @@ func (b *GitlabBackend) pathConfigWrite(ctx context.Context, req *logical.Reques
 		Data:     configDetail(config),
 		Warnings: warnings,
 	}, nil
+}
+
+// validateBaseURL requires base_url to be an https URL, so the parent token
+// never transits in cleartext. Plain http is allowed only for loopback
+// addresses (local development and the CI acceptance environment).
+func validateBaseURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("not a valid URL: %w", err)
+	}
+
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		host := u.Hostname()
+		if host == "localhost" {
+			return nil
+		}
+
+		ip := net.ParseIP(host)
+		if ip != nil && ip.IsLoopback() {
+			return nil
+		}
+
+		return errors.New("plain http is only allowed for loopback addresses; use https so the parent token does not transit in cleartext")
+	default:
+		return errors.New("must be an http(s) URL")
+	}
 }
 
 func pathConfig(b *GitlabBackend) []*framework.Path {

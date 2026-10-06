@@ -606,6 +606,17 @@ func TestVault(t *testing.T) {
 		req := other.last(t)
 		assert.Equal(t, "rotated", req.Token)
 		assert.Equal(t, "after-rotate", req.Body["name"])
+
+		// switch back for the rest of the suite; the "after-rotate" lease now
+		// has a stale issuer and must NOT be revoked against `other` later
+		_, err = logical.Write("gitlab/config", map[string]any{"base_url": gitlab.URL, "token": "parent-token", "max_ttl": "168h"})
+		require.NoError(t, err)
+	})
+
+	t.Run("plain http to a non-loopback host is rejected", func(t *testing.T) {
+		_, err := logical.Write("gitlab/config", map[string]any{"base_url": "http://gitlab.example.com", "token": "t"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "plain http is only allowed for loopback")
 	})
 
 	t.Run("multiplexed second mount is isolated", func(t *testing.T) {
@@ -780,6 +791,10 @@ path "gitlab/dynamic/project_id/{{identity.entity.aliases.%[1]s.metadata.project
 		}
 
 		assert.Zero(t, gitlab.activeCount(), "tokens left in GitLab")
-		assert.Zero(t, other.activeCount(), "tokens left in GitLab")
+		// The one lease minted while base_url pointed at `other` has a stale
+		// issuer: the plugin deliberately skips remote revocation there (it
+		// will not send the current parent token to a historical URL) and the
+		// token is reclaimed by its GitLab-side expiry backstop instead.
+		assert.Equal(t, 1, other.activeCount(), "exactly the stale-issuer token remains, by design")
 	})
 }

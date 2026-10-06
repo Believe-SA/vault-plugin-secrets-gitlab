@@ -122,6 +122,11 @@ func Backend(conf *logical.BackendConfig) *GitlabBackend {
 		},
 		Invalidate:     backend.invalidate,
 		RunningVersion: Version,
+		PathsSpecial: &logical.Paths{
+			// The config entry holds the parent GitLab token: ask Vault to
+			// seal-wrap it (extra encryption layer on Enterprise, harmless on OSS).
+			SealWrapStorage: []string{pathPatternConfig},
+		},
 	}
 
 	return backend

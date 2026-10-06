@@ -50,7 +50,7 @@ var roleSchema = map[string]*framework.FieldSchema{
 	},
 	"access_level": {
 		Type:        framework.TypeInt,
-		Description: "access level of project access token",
+		Description: "access level of project access token (10/20/30/40, 50 with allow_owner_level). If omitted, GitLab applies its own default, Maintainer (40) - grant deliberately",
 	},
 }
 
@@ -79,8 +79,8 @@ func (b *GitlabBackend) pathRoleCreateUpdate(ctx context.Context, req *logical.R
 
 	lock := b.roleLock(roleName)
 
-	lock.RLock()
-	defer lock.RUnlock()
+	lock.Lock()
+	defer lock.Unlock()
 
 	role, err := getRoleEntry(ctx, req.Storage, roleName)
 	if err != nil {
@@ -159,8 +159,8 @@ func (b *GitlabBackend) pathRoleDelete(ctx context.Context, req *logical.Request
 
 	lock := b.roleLock(roleName)
 
-	lock.RLock()
-	defer lock.RUnlock()
+	lock.Lock()
+	defer lock.Unlock()
 
 	// get the role to make sure it exists and to get the role id
 	role, err := getRoleEntry(ctx, req.Storage, roleName)
