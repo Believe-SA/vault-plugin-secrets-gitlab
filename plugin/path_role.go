@@ -54,8 +54,8 @@ var roleSchema = map[string]*framework.FieldSchema{
 	},
 }
 
-func roleDetail(role *RoleStorageEntry) map[string]interface{} {
-	return map[string]interface{}{
+func roleDetail(role *RoleStorageEntry) map[string]any {
+	return map[string]any{
 		"role_name":    role.RoleName,
 		"id":           role.BaseTokenStorage.ID,
 		"name":         role.BaseTokenStorage.Name,
@@ -263,7 +263,7 @@ and scopes for the generated project access token.
 var roleExamples = []framework.RequestExample{
 	{
 		Description: "Create/update a role",
-		Data: map[string]interface{}{
+		Data: map[string]any{
 			"role_name": "MyProject1ReadRole",
 			"id":        1,
 			"name":      "MyProjectAccessToken",

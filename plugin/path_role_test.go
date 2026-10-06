@@ -30,13 +30,13 @@ func TestPathRole(t *testing.T) {
 	a := assert.New(t)
 	backend, storage := getTestBackend(t, false)
 
-	conf := map[string]interface{}{
+	conf := map[string]any{
 		"base_url": "http://randomhost",
 		"token":    "gibberish",
 	}
 	testConfigUpdate(t, backend, storage, conf)
 
-	data := map[string]interface{}{
+	data := map[string]any{
 		"id":           1,
 		"name":         "role-test",
 		"scopes":       []string{"api", "read_repository"},
@@ -90,7 +90,7 @@ func TestPathRole(t *testing.T) {
 
 	t.Run("validation failure", func(t *testing.T) {
 		roleName := "validation-failure"
-		d := map[string]interface{}{
+		d := map[string]any{
 			"id":           -1,
 			"token_ttl":    fmt.Sprintf("%dh", 30*24),
 			"access_level": 31,
@@ -108,7 +108,7 @@ func TestPathRole(t *testing.T) {
 
 	t.Run("validation of not allowed access level", func(t *testing.T) {
 		roleName := "validation-not-allowed-access-level"
-		d := map[string]interface{}{
+		d := map[string]any{
 			"id":           1,
 			"name":         "role-test-not-allowed-access-level",
 			"scopes":       []string{"api", "read_repository"},
@@ -126,14 +126,14 @@ func TestPathRoleWithAllowOwnerAccessLevel(t *testing.T) {
 	a := assert.New(t)
 	backend, storage := getTestBackend(t, false)
 
-	conf := map[string]interface{}{
+	conf := map[string]any{
 		"base_url":          "http://randomhost",
 		"token":             "gibberish",
 		"allow_owner_level": true,
 	}
 	testConfigUpdate(t, backend, storage, conf)
 
-	data := map[string]interface{}{
+	data := map[string]any{
 		"id":           1,
 		"name":         "role-test",
 		"scopes":       []string{"api", "read_repository"},
@@ -168,19 +168,19 @@ func TestPathRoleList(t *testing.T) {
 	a := assert.New(t)
 
 	backend, storage := getTestBackend(t, false)
-	conf := map[string]interface{}{
+	conf := map[string]any{
 		"base_url": "http://randomhost",
 		"token":    "gibberish",
 	}
 	testConfigUpdate(t, backend, storage, conf)
 
-	data := map[string]interface{}{
+	data := map[string]any{
 		"id":     1,
 		"name":   "role-test",
 		"scopes": []string{"api", "read_repository"},
 	}
 
-	var listResp map[string]interface{}
+	var listResp map[string]any
 
 	resp, err := testRoleList(t, backend, storage)
 	require.NoError(t, err)
@@ -220,7 +220,7 @@ func TestPathRoleList(t *testing.T) {
 	a.Equal(roleName1, returnedRoles[0], "incorrect path set")
 }
 
-func testRoleCreate(t *testing.T, b logical.Backend, s logical.Storage, roleName string, data map[string]interface{}) (*logical.Response, error) {
+func testRoleCreate(t *testing.T, b logical.Backend, s logical.Storage, roleName string, data map[string]any) (*logical.Response, error) {
 	t.Helper()
 
 	resp, err := b.HandleRequest(context.Background(), &logical.Request{
@@ -233,7 +233,7 @@ func testRoleCreate(t *testing.T, b logical.Backend, s logical.Storage, roleName
 	return resp, err
 }
 
-func mustRoleCreate(t *testing.T, b logical.Backend, s logical.Storage, roleName string, data map[string]interface{}) {
+func mustRoleCreate(t *testing.T, b logical.Backend, s logical.Storage, roleName string, data map[string]any) {
 	t.Helper()
 	resp, err := testRoleCreate(t, b, s, roleName, data)
 	require.NoError(t, err)
@@ -243,7 +243,7 @@ func mustRoleCreate(t *testing.T, b logical.Backend, s logical.Storage, roleName
 func testRoleRead(t *testing.T, b logical.Backend, s logical.Storage, roleName string) (*logical.Response, error) {
 	t.Helper()
 
-	data := map[string]interface{}{
+	data := map[string]any{
 		"role_name": roleName,
 	}
 
@@ -260,7 +260,7 @@ func testRoleRead(t *testing.T, b logical.Backend, s logical.Storage, roleName s
 func testRoleDelete(t *testing.T, b logical.Backend, s logical.Storage, roleName string) (*logical.Response, error) {
 	t.Helper()
 
-	data := map[string]interface{}{
+	data := map[string]any{
 		"role_name": roleName,
 	}
 

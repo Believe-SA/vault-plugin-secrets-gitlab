@@ -40,7 +40,7 @@ func TestAccRoleToken(t *testing.T) {
 	t.Run("successfully create", func(t *testing.T) {
 		t.Parallel()
 
-		data := map[string]interface{}{
+		data := map[string]any{
 			"id":     ID,
 			"name":   "vault-role-test",
 			"scopes": []string{"read_api"},
@@ -63,7 +63,7 @@ func TestAccRoleToken(t *testing.T) {
 	t.Run("successfully create token for role with access level", func(t *testing.T) {
 		t.Parallel()
 
-		data := map[string]interface{}{
+		data := map[string]any{
 			"id":           ID,
 			"name":         "vault-role-test-access-level",
 			"access_level": 30,
@@ -93,7 +93,7 @@ func TestAccRoleToken(t *testing.T) {
 }
 
 // Create the token given a role name.
-func testIssueRoleToken(t *testing.T, b logical.Backend, req *logical.Request, roleName string, data map[string]interface{}) (*logical.Response, error) {
+func testIssueRoleToken(t *testing.T, b logical.Backend, req *logical.Request, roleName string, data map[string]any) (*logical.Response, error) {
 	t.Helper()
 
 	req.Operation = logical.CreateOperation

@@ -47,8 +47,8 @@ var accessTokenSchema = map[string]*framework.FieldSchema{
 	},
 }
 
-func tokenDetails(pat *PAT) map[string]interface{} {
-	d := map[string]interface{}{
+func tokenDetails(pat *PAT) map[string]any {
+	d := map[string]any{
 		"token":        pat.Token,
 		"id":           pat.ID,
 		"name":         pat.Name,
@@ -128,8 +128,8 @@ func pathToken(b *GitlabBackend) []*framework.Path {
 			HelpDescription: pathTokenHelpDesc,
 		},
 		{
-			Pattern: "dynamic/project_id/(?P<id>\\d+)/name/(?P<name>[^/]+)",
-			Fields: accessTokenSchema,
+			Pattern:        "dynamic/project_id/(?P<id>\\d+)/name/(?P<name>[^/]+)",
+			Fields:         accessTokenSchema,
 			ExistenceCheck: b.pathTokenExistenceCheck(),
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.CreateOperation: &framework.PathOperation{
@@ -160,7 +160,7 @@ will be used as a name field in Gitlab, and scopes for the generated project acc
 var tokenExamples = []framework.RequestExample{
 	{
 		Description: "Create a project access token",
-		Data: map[string]interface{}{
+		Data: map[string]any{
 			"id":     1,
 			"name":   "MyProjectAccessToken",
 			"scopes": []string{"read_api", "read_repository"},
@@ -171,7 +171,7 @@ var tokenExamples = []framework.RequestExample{
 var flatTokenExamples = []framework.RequestExample{
 	{
 		Description: "Create a project access token using path for project id and name, ex: dynamic/project_id/1/name/MyProjectAccessToken",
-		Data: map[string]interface{}{
+		Data: map[string]any{
 			"scopes": []string{"read_api", "read_repository"},
 		},
 	},

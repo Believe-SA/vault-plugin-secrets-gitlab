@@ -27,6 +27,8 @@ linters:
     - nilerr
     - mnd
     - exhaustruct
+    - exhaustruct_v5
+    - goconst
     - err113
     - paralleltest
   exclusions:
@@ -34,8 +36,11 @@ linters:
       - linters:
         - dupl
         - errcheck
+        - forcetypeassert
         - goconst
         - gocyclo
+        - gosec
+        - noctx
         - testpackage
         path: _test\.go
 

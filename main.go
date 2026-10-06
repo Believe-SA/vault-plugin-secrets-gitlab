@@ -14,36 +14,55 @@
 package main
 
 import (
-	"log"
+	"fmt"
 	"os"
 
+	hclog "github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/vault/api"
-
 	"github.com/hashicorp/vault/sdk/plugin"
 	gitlabtoken "github.com/splunk/vault-plugin-secrets-gitlab/plugin"
 )
 
+// Build metadata, injected by GoReleaser via -ldflags at release time.
 var (
-	version = "dev"
-	commit  = "none"
-	date    = "unknown"
+	commit = "none"
+	date   = "unknown"
 )
 
 func main() {
+	if len(os.Args) == 2 {
+		switch os.Args[1] {
+		case "--version", "-version", "version":
+			_, _ = fmt.Fprintf(os.Stdout, "vault-plugin-secrets-gitlab %s (commit %s, built %s)\n", gitlabtoken.Version, commit, date)
+
+			return
+		}
+	}
+
 	apiClientMeta := &api.PluginAPIClientMeta{}
 	flags := apiClientMeta.FlagSet()
-	_ = flags.Parse(os.Args[1:])
+
+	err := flags.Parse(os.Args[1:])
+	if err != nil {
+		logFatal(err)
+	}
 
 	tlsConfig := apiClientMeta.GetTLSConfig()
 	tlsProviderFunc := api.VaultPluginTLSProvider(tlsConfig)
 
-	log.Printf("vault-plugin-secrets-gitlab %s, commit %s, built at %s\n", version, commit, date)
-
-	err := plugin.Serve(&plugin.ServeOpts{
+	// ServeMultiplex lets Vault run a single plugin process for every mount of
+	// this plugin, which is the recommended mode for Vault 1.12+ and 2.x.
+	err = plugin.ServeMultiplex(&plugin.ServeOpts{
 		BackendFactoryFunc: gitlabtoken.Factory,
 		TLSProviderFunc:    tlsProviderFunc,
 	})
 	if err != nil {
-		log.Fatal(err)
+		logFatal(err)
 	}
+}
+
+func logFatal(err error) {
+	logger := hclog.New(&hclog.LoggerOptions{})
+	logger.Error("plugin shutting down", "error", err)
+	os.Exit(1)
 }

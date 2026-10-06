@@ -95,7 +95,7 @@ whose parameters are used to generate a project access token.
 var roleTokenExamples = []framework.RequestExample{
 	{
 		Description: "Create a project access token based on a predefined role",
-		Data: map[string]interface{}{
+		Data: map[string]any{
 			"role_name": "MyRole",
 		},
 	},

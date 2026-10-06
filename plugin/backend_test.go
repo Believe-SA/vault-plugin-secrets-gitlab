@@ -36,7 +36,9 @@ func getTestBackend(t *testing.T, mockGitlab bool) (logical.Backend, logical.Sto
 
 	if mockGitlab {
 		gb, _ := b.(*GitlabBackend)
-		gb.client = &mockGitlabClient{}
+		gb.newClient = func(_ *ConfigStorageEntry) (Client, error) {
+			return &mockGitlabClient{}, nil
+		}
 	}
 
 	return b, config.StorageView
@@ -48,7 +50,7 @@ func newGitlabAccEnv(t *testing.T) (*logical.Request, logical.Backend) {
 
 	backend, storage := getTestBackend(t, false)
 
-	conf := map[string]interface{}{
+	conf := map[string]any{
 		"base_url": envOrDefault("GITLAB_URL", "http://localhost"),
 		"token":    envOrDefault("GITLAB_TOKEN", "BogusToken"),
 	}
@@ -60,4 +62,36 @@ func newGitlabAccEnv(t *testing.T) (*logical.Request, logical.Backend) {
 	}
 
 	return req, backend
+}
+
+func TestBackendRunningVersion(t *testing.T) {
+	t.Parallel()
+
+	b, _ := getTestBackend(t, true)
+	gb, _ := b.(*GitlabBackend)
+	require.Equal(t, Version, gb.PluginVersion().Version)
+}
+
+func TestConfigWriteResetsClient(t *testing.T) {
+	t.Parallel()
+
+	b, s := getTestBackend(t, true)
+	gb, _ := b.(*GitlabBackend)
+
+	var built []string
+
+	gb.newClient = func(c *ConfigStorageEntry) (Client, error) {
+		built = append(built, c.BaseURL)
+
+		return &mockGitlabClient{}, nil
+	}
+
+	for _, url := range []string{"https://one.example.com", "https://two.example.com"} {
+		testConfigUpdate(t, b, s, map[string]any{"base_url": url, "token": "t"})
+
+		_, err := gb.getClient(context.Background(), s)
+		require.NoError(t, err)
+	}
+
+	require.Equal(t, []string{"https://one.example.com", "https://two.example.com"}, built)
 }
