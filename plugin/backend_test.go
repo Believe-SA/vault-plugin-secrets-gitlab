@@ -28,6 +28,19 @@ import (
 func getTestBackend(t *testing.T, mockGitlab bool) (logical.Backend, logical.Storage) {
 	t.Helper()
 
+	b, s, _ := getTestBackendWithMock(t, mockGitlab)
+
+	return b, s
+}
+
+// getTestBackendWithMock also returns the mocked GitLab client shared by every
+// client the backend builds.
+//
+//nolint:ireturn
+func getTestBackendWithMock(t *testing.T, mockGitlab bool) (logical.Backend, logical.Storage, *mockGitlabClient) {
+	t.Helper()
+
+	mock := &mockGitlabClient{}
 	config := logical.TestBackendConfig()
 	config.StorageView = &logical.InmemStorage{}
 
@@ -37,11 +50,11 @@ func getTestBackend(t *testing.T, mockGitlab bool) (logical.Backend, logical.Sto
 	if mockGitlab {
 		gb, _ := b.(*GitlabBackend)
 		gb.newClient = func(_ *ConfigStorageEntry) (Client, error) {
-			return &mockGitlabClient{}, nil
+			return mock, nil
 		}
 	}
 
-	return b, config.StorageView
+	return b, config.StorageView, mock
 }
 
 //nolint:ireturn

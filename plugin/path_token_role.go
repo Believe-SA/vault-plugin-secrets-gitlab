@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/logical"
@@ -32,11 +31,6 @@ var roleTokenSchema = map[string]*framework.FieldSchema{
 }
 
 func (b *GitlabBackend) pathRoleTokenCreate(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
-	gc, err := b.getClient(ctx, req.Storage)
-	if err != nil {
-		return logical.ErrorResponse("failed to obtain gitlab client - %s", err.Error()), nil
-	}
-
 	roleName, ok := data.Get("role_name").(string)
 	if !ok {
 		return nil, errors.New("string type assertion failed for data field 'role_name'")
@@ -48,15 +42,18 @@ func (b *GitlabBackend) pathRoleTokenCreate(ctx context.Context, req *logical.Re
 		return logical.ErrorResponse(fmt.Sprintf("Role name '%s' not recognised", roleName)), nil
 	}
 
-	expiresAt := time.Now().UTC().Add(role.TokenTTL)
-	b.Logger().Debug("generating access token for a role", "role_name", role.RoleName, "expires_at", expiresAt)
-
-	pat, err := gc.CreateProjectAccessToken(&role.BaseTokenStorage, &expiresAt)
+	config, err := getConfig(ctx, req.Storage)
 	if err != nil {
-		return logical.ErrorResponse("Failed to create a token - " + err.Error()), nil
+		return logical.ErrorResponse("failed to obtain GitLab config - %s", err.Error()), nil
 	}
 
-	return &logical.Response{Data: tokenDetails(pat)}, nil
+	if config == nil {
+		return logical.ErrorResponse("GitLab backend configuration has not been set up"), nil
+	}
+
+	b.Logger().Debug("generating access token for a role", "role_name", role.RoleName, "ttl", role.TokenTTL)
+
+	return b.issueToken(ctx, req, config, &role.BaseTokenStorage, role.TokenTTL)
 }
 
 // Set up the paths for the roles within vault.

@@ -17,7 +17,6 @@ package gitlabtoken
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/hashicorp/vault/sdk/framework"
@@ -26,12 +25,7 @@ import (
 
 // NoTTLWarning returns a warning message for missing TTL for the provided ttl flag name.
 func NoTTLWarning(s string) string {
-	return s + "is not set. Token can be generated with expiration 'never'"
-}
-
-// LT24HourTTLWarning returns a warning message for the provided TTL flag name if the TTL is < 24 hrs.
-func LT24HourTTLWarning(s string) string {
-	return fmt.Sprintf("%[1]s is set with less than 24 hours. With current token expiry limitation, this %[1]s is ignored", s)
+	return s + " is not set. Token leases are bounded by the mount's max lease TTL only"
 }
 
 // Schema for the configuring Gitlab token plugin, this will map the fields coming in from the
@@ -51,7 +45,7 @@ var configSchema = map[string]*framework.FieldSchema{
 	},
 	"max_ttl": {
 		Type:        framework.TypeDurationSecond,
-		Description: `Maximum lifetime a generated token will be valid for. If <= 0, will use system default(0, never expire)`,
+		Description: `Maximum lease duration of a generated token, renewals included. Sub-day values are honored: the token is revoked in Gitlab when its lease ends. If <= 0, the mount's max lease TTL applies`,
 		Default:     0,
 	},
 	"allow_owner_level": {
@@ -127,13 +121,9 @@ func (b *GitlabBackend) pathConfigWrite(ctx context.Context, req *logical.Reques
 			return nil, errors.New("int type assertion failed for data field 'max_ttl'")
 		}
 
-		// Until Gitlab implements granular token expiry.
-		// bounce anything less than 24 hours
-		if maxTTL > 0 && maxTTL < (24*3600) {
-			warnings = append(warnings, LT24HourTTLWarning("max_ttl"))
-		} else if maxTTL > 0 {
-			config.MaxTTL = time.Duration(maxTTL) * time.Second
-		}
+		// Sub-day values are fine: GitLab still gets a day-granular expiry
+		// (see gitlabExpiry) and Vault revokes the token when the lease ends.
+		config.MaxTTL = time.Duration(max(maxTTL, 0)) * time.Second
 	}
 
 	if config.MaxTTL == 0 {

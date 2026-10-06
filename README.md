@@ -20,6 +20,7 @@
 A Vault secrets engine that issues [GitLab project access tokens][pat] on demand:
 
 - Tokens are minted through the GitLab API from a single parent token held by Vault
+- Every token is a Vault **lease**: it is deleted in GitLab when the lease expires or is revoked — so TTLs shorter than GitLab's one-day minimum really are enforced
 - Free-form requests (`token`, `dynamic/project_id/<id>/name/<name>`) or predefined **roles** (`token/<role>`)
 - Scopes, access level (guest → maintainer, owner opt-in) and expiry, bounded by a mount-wide `max_ttl`
 - Access gated by standard Vault ACLs
@@ -88,32 +89,35 @@ max_ttl              2592000
 |---|---|---|
 | `base_url` | `https://gitlab.com` | GitLab instance URL |
 | `token` | — | Parent token; write-only, never returned |
-| `max_ttl` | `0` (unbounded) | Upper bound for any requested `expires_at`; values below 24h are ignored |
+| `max_ttl` | `0` (mount max lease TTL) | Maximum lease duration of a token, renewals included. Sub-day values are honored |
 | `allow_owner_level` | `false` | Allow `access_level=50` (Owner) |
 
 Changes take effect immediately on the next request.
 
 ### Usage
 
-Free-form request:
+Free-form request — `ttl` is the lease duration (mount default when omitted):
 
 ```text
-$ vault write gitlab/token id=1 name=ci-token scopes=api,write_repository access_level=30 expires_at=2026-12-31T00:00:00Z
-Key             Value
----             -----
-access_level    30
-expires_at      2026-12-31 00:00:00 +0000 UTC
-id              12345
-name            ci-token
-scopes          [api write_repository]
-token           glpat-REDACTED
+$ vault write gitlab/token id=1 name=ci-token scopes=api,write_repository access_level=30 ttl=1h
+Key                Value
+---                -----
+lease_id           gitlab/token/Xy7kz0yJ8qM4V1QeYf3cR2aT
+lease_duration     1h
+lease_renewable    true
+access_level       30
+expires_at         2026-10-08 00:00:00 +0000 UTC
+id                 12345
+name               ci-token
+scopes             [api write_repository]
+token              glpat-REDACTED
 ```
 
 The project and token name can also be carried by the path, which makes it
 easy to scope ACL policies per project:
 
 ```text
-$ vault write gitlab/dynamic/project_id/1/name/ci-token scopes=read_api
+$ vault write gitlab/dynamic/project_id/1/name/ci-token scopes=read_api ttl=15m
 ```
 
 ```hcl
@@ -123,26 +127,57 @@ path "gitlab/dynamic/project_id/1/name/*" {
 }
 ```
 
-Roles predefine the parameters, so callers cannot choose them:
+Roles predefine the parameters, so callers cannot choose them; `token_ttl`
+(default `24h`) is the lease duration:
 
 ```text
-$ vault write gitlab/roles/ci-role id=1 name=project1-role scopes=read_api,read_repository token_ttl=48h
+$ vault write gitlab/roles/ci-role id=1 name=project1-role scopes=read_api,read_repository token_ttl=30m
 $ vault write -f gitlab/token/ci-role
-Key             Value
----             -----
-access_level    40
-expires_at      2026-10-08 00:00:00 +0000 UTC
-id              12346
-name            project1-role
-scopes          [read_api read_repository]
-token           glpat-REDACTED
 ```
 
 See `vault path-help gitlab/` for every endpoint, and the
 [design principles](docs/design-principles.md) for access-control guidance.
 
-> GitLab project access tokens have day granularity (they expire at midnight
-> UTC), so the shortest effective lifetime is about one day.
+### Token lifetime
+
+GitLab only accepts a **date** for a project access token's expiry, at the
+earliest tomorrow (tokens expire at midnight UTC), so a token cannot be
+created with a sub-day lifetime. The plugin complies with that constraint and
+enforces the real TTL through Vault instead:
+
+1. The token is created in GitLab with `expires_at` set to the first UTC
+   midnight after the lease's **maximum** possible end
+   (`now + min(max_ttl, mount max_lease_ttl)`), i.e. tomorrow at the earliest.
+   This is only a backstop in case Vault never revokes the token.
+2. Vault returns it as a lease of `ttl`. When the lease expires, is revoked
+   (`vault lease revoke`, `vault lease revoke -prefix gitlab/`) or the mount is
+   disabled, the plugin deletes the token through
+   `DELETE /projects/:id/access_tokens/:token_id`.
+3. Leases are renewable (`vault lease renew`) up to `max_ttl` from issue time,
+   which is always covered by the GitLab backstop.
+
+The returned `expires_at` is that GitLab backstop; `lease_duration` is the
+effective lifetime. Revocation always targets the GitLab instance that issued
+the token, with the currently configured parent token, and a token already
+gone from GitLab counts as revoked. If GitLab is unreachable, Vault retries the
+revocation with backoff.
+
+### Upgrading from 0.x (breaking changes)
+
+- Tokens are now leased and **deleted from GitLab when the lease ends**.
+  Previously they lived until GitLab's expiry. Clients that keep a token
+  longer than its lease must renew the lease or request a longer `ttl`.
+- `expires_at` on `token` and `dynamic/...` is deprecated: it now sets the
+  lease end (`ttl` = time until `expires_at`); GitLab gets the backstop date.
+  It cannot be combined with `ttl`.
+- Requests without `ttl`/`expires_at` used to create tokens with no expiry; they
+  now get the mount's default lease TTL.
+- `max_ttl` values below 24h, previously ignored with a warning, are now
+  applied. Without `max_ttl`, the mount's `max_lease_ttl` (tune it with
+  `vault secrets tune -max-lease-ttl=...`) bounds every lease.
+- The parent token must be allowed to revoke project access tokens
+  (Maintainer or higher, same as creation).
+- Tokens issued before the upgrade have no lease and are left untouched.
 
 ## Local Development
 
@@ -187,8 +222,9 @@ make report                        # coverage/coverage.html
 
 Vault integration tests build the plugin, start a real `vault server -dev`,
 register it in the catalog (sha256 + version), mount it, and drive every
-endpoint against a fake GitLab API — including version pinning, multiplexed
-mounts and plugin reload. The Vault binary is downloaded into `.tools/`:
+endpoint against a fake GitLab API that enforces GitLab's day-granular expiry
+— including lease expiry and revocation deleting tokens in GitLab, renewal
+caps, version pinning, multiplexed mounts and plugin reload. The Vault binary is downloaded into `.tools/`:
 
 ```bash
 make test-vault                        # latest GA Vault

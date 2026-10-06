@@ -117,6 +117,9 @@ func Backend(conf *logical.BackendConfig) *GitlabBackend {
 			pathRoleList(backend),
 			pathRoleToken(backend),
 		),
+		Secrets: []*framework.Secret{
+			secretToken(backend),
+		},
 		Invalidate:     backend.invalidate,
 		RunningVersion: Version,
 	}
@@ -130,5 +133,8 @@ based on user defined permission targets. This enables users to gain access to
 Gitlab resources without needing to create or manage a static project access token.
 
 After mounting this secrets engine, you can configure the credentials using the
-"config/" endpoints. You can generate project access tokens using the "token/" endpoints. 
+"config/" endpoints. You can generate project access tokens using the "token/" endpoints.
+
+Every generated token is leased: it is revoked in Gitlab when its Vault lease
+expires or is revoked.
 `

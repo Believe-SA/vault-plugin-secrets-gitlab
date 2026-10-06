@@ -53,7 +53,8 @@ func TestAccToken(t *testing.T) {
 
 		assert.NotEmpty(t, resp.Data["token"], "no token returned")
 		assert.NotEmpty(t, resp.Data["id"], "no id returned")
-		assert.Empty(t, resp.Data["expires_at"], "default is never(nil) for expires_at")
+		assert.NotEmpty(t, resp.Data["expires_at"], "a gitlab backstop expiry is always set")
+		require.NotNil(t, resp.Secret, "token must be leased")
 	})
 
 	t.Run("successfully create with expiration", func(t *testing.T) {
@@ -73,7 +74,7 @@ func TestAccToken(t *testing.T) {
 		assert.NotEmpty(t, resp.Data["token"], "no token returned")
 		assert.NotEmpty(t, resp.Data["id"], "no id returned")
 		expiresAt, _ := resp.Data["expires_at"].(time.Time)
-		assert.Contains(t, expiresAt, e.Format("2006-01-02"))
+		assert.True(t, expiresAt.After(e), "gitlab expiry must outlive the lease")
 	})
 
 	t.Run("successfully create with access level", func(t *testing.T) {
@@ -95,7 +96,7 @@ func TestAccToken(t *testing.T) {
 		assert.NotEmpty(t, resp.Data["id"], "no id returned")
 		assert.NotEmpty(t, resp.Data["access_level"], "no access_level returned")
 		expiresAt, _ := resp.Data["expires_at"].(time.Time)
-		assert.Contains(t, expiresAt.String(), e.Format("2006-01-02"))
+		assert.True(t, expiresAt.After(e), "gitlab expiry must outlive the lease")
 
 		assert.Equal(t, gitlab.AccessLevelValue(30), resp.Data["access_level"])
 	})
@@ -146,6 +147,7 @@ func testIssueToken(t *testing.T, b logical.Backend, req *logical.Request, data 
 	req.Data = data
 
 	resp, err := b.HandleRequest(context.Background(), req)
+	revokeOnCleanup(t, b, req.Storage, resp)
 
 	return resp, err
 }
@@ -159,6 +161,7 @@ func testIssueFlatPathToken(t *testing.T, b logical.Backend, req *logical.Reques
 	req.Data = data
 
 	resp, err := b.HandleRequest(context.Background(), req)
+	revokeOnCleanup(t, b, req.Storage, resp)
 
 	return resp, err
 }
@@ -348,7 +351,7 @@ func TestAccFlatPathToken(t *testing.T) {
 		assert.NotEmpty(t, resp.Data["token"])
 		assert.NotEmpty(t, resp.Data["id"])
 		assert.Equal(t, "vault-flat-test", resp.Data["name"])
-		assert.Empty(t, resp.Data["expires_at"])
+		assert.NotEmpty(t, resp.Data["expires_at"])
 	})
 
 	t.Run("successfully create with expiration", func(t *testing.T) {
@@ -362,7 +365,7 @@ func TestAccFlatPathToken(t *testing.T) {
 		require.False(t, resp.IsError())
 
 		assert.NotEmpty(t, resp.Data["token"])
-		assert.Contains(t, resp.Data["expires_at"].(time.Time).String(), e.Format("2006-01-02"))
+		assert.True(t, resp.Data["expires_at"].(time.Time).After(e))
 	})
 
 	t.Run("successfully create with access level", func(t *testing.T) {
@@ -385,5 +388,26 @@ func TestAccFlatPathToken(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, resp.IsError())
 		assert.Contains(t, resp.Data["error"], "scopes are empty")
+	})
+}
+
+// revokeOnCleanup revokes a leased token when the test ends, as Vault would
+// when the lease expires, so acceptance runs do not leave tokens in GitLab.
+func revokeOnCleanup(t *testing.T, b logical.Backend, s logical.Storage, resp *logical.Response) {
+	t.Helper()
+
+	if resp == nil || resp.Secret == nil {
+		return
+	}
+
+	secret := resp.Secret
+
+	t.Cleanup(func() {
+		_, err := b.HandleRequest(context.Background(), &logical.Request{
+			Operation: logical.RevokeOperation,
+			Storage:   s,
+			Secret:    secret,
+		})
+		assert.NoError(t, err, "revoking token %v", secret.InternalData["token_id"])
 	})
 }
