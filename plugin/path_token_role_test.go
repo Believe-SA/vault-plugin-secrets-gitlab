@@ -49,7 +49,7 @@ func TestAccRoleToken(t *testing.T) {
 		mustRoleCreate(t, backend, req.Storage, roleName, data)
 		resp, err := testIssueRoleToken(t, backend, req, roleName, nil)
 		require.NoError(t, err)
-		require.False(t, resp.IsError())
+		require.False(t, resp.IsError(), resp.Error())
 
 		assert.NotEmpty(t, resp.Data["token"], "no token returned")
 		assert.NotEmpty(t, resp.Data["id"], "no id returned")
@@ -73,7 +73,7 @@ func TestAccRoleToken(t *testing.T) {
 		mustRoleCreate(t, backend, req.Storage, roleName, data)
 		resp, err := testIssueRoleToken(t, backend, req, roleName, nil)
 		require.NoError(t, err)
-		require.False(t, resp.IsError())
+		require.False(t, resp.IsError(), resp.Error())
 
 		assert.NotEmpty(t, resp.Data["token"], "no token returned")
 		assert.NotEmpty(t, resp.Data["id"], "no id returned")
