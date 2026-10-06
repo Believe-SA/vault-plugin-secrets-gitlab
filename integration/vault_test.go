@@ -24,9 +24,13 @@ package integration
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net"
@@ -42,6 +46,8 @@ import (
 	"testing"
 	"time"
 
+	jose "github.com/go-jose/go-jose/v4"
+	josejwt "github.com/go-jose/go-jose/v4/jwt"
 	"github.com/hashicorp/vault/api"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -215,6 +221,20 @@ func startVault(t *testing.T, vaultBin, pluginDir string) *api.Client {
 	}, 30*time.Second, 200*time.Millisecond, "vault dev server did not become ready")
 
 	return client
+}
+
+// loginAs logs in through an auth method and returns a client using that token.
+func loginAs(t *testing.T, root *api.Client, path string, data map[string]any) *api.Client {
+	t.Helper()
+
+	secret, err := root.Logical().Write(path, data)
+	require.NoError(t, err)
+
+	c, err := root.Clone()
+	require.NoError(t, err)
+	c.SetToken(secret.Auth.ClientToken)
+
+	return c
 }
 
 //nolint:funlen,maintidx
@@ -464,6 +484,119 @@ func TestVault(t *testing.T) {
 		if lastErr != nil {
 			t.Logf("last error: %v", lastErr)
 		}
+	})
+
+	t.Run("templated policy: entity metadata picks the project", func(t *testing.T) {
+		require.NoError(t, sys.EnableAuthWithOptionsWithContext(ctx, "userpass", &api.EnableAuthOptions{Type: "userpass"}))
+		require.NoError(t, sys.PutPolicyWithContext(ctx, "gitlab-own-project", `
+path "gitlab/dynamic/project_id/{{identity.entity.metadata.gitlab_project_id}}/name/{{identity.entity.name}}" {
+  capabilities = ["create", "update"]
+}`))
+
+		_, err := logical.Write("auth/userpass/users/alice", map[string]any{"password": "pw", "token_policies": "gitlab-own-project"})
+		require.NoError(t, err)
+
+		entity, err := logical.Write("identity/entity", map[string]any{
+			"name":     "alice",
+			"metadata": map[string]string{"gitlab_project_id": "21"},
+		})
+		require.NoError(t, err)
+
+		auths, err := sys.ListAuthWithContext(ctx)
+		require.NoError(t, err)
+
+		_, err = logical.Write("identity/entity-alias", map[string]any{
+			"name":           "alice",
+			"canonical_id":   entity.Data["id"],
+			"mount_accessor": auths["userpass/"].Accessor,
+		})
+		require.NoError(t, err)
+
+		alice := loginAs(t, client, "auth/userpass/login/alice", map[string]any{"password": "pw"})
+
+		_, err = alice.Logical().Write("gitlab/dynamic/project_id/21/name/alice", map[string]any{"scopes": "read_api", "ttl": "1h"})
+		require.NoError(t, err, "own project, own name")
+
+		for _, path := range []string{
+			"gitlab/dynamic/project_id/22/name/alice", // other project
+			"gitlab/dynamic/project_id/21/name/bob",   // other token name
+			"gitlab/token",                            // free-form path
+		} {
+			_, err = alice.Logical().Write(path, map[string]any{"id": 21, "name": "alice", "scopes": "read_api"})
+			require.Error(t, err, path)
+			assert.Contains(t, err.Error(), "permission denied", path)
+		}
+	})
+
+	t.Run("templated policy: GitLab CI JWT project_id claim picks the project", func(t *testing.T) {
+		key, err := rsa.GenerateKey(rand.Reader, 2048)
+		require.NoError(t, err)
+
+		pub, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
+		require.NoError(t, err)
+
+		require.NoError(t, sys.EnableAuthWithOptionsWithContext(ctx, "jwt", &api.EnableAuthOptions{Type: "jwt"}))
+
+		_, err = logical.Write("auth/jwt/config", map[string]any{
+			"bound_issuer":           "https://gitlab.example.com",
+			"jwt_validation_pubkeys": []string{string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pub}))},
+		})
+		require.NoError(t, err)
+
+		_, err = logical.Write("auth/jwt/role/gitlab-ci", map[string]any{
+			"role_type":       "jwt",
+			"user_claim":      "project_id",
+			"bound_audiences": []string{"https://vault.example.com"},
+			"bound_claims":    map[string]any{"namespace_path": "mygroup"},
+			"claim_mappings":  map[string]any{"project_id": "project_id", "project_path": "project_path"},
+			"token_policies":  []string{"gitlab-ci"},
+			"token_ttl":       "10m",
+		})
+		require.NoError(t, err)
+
+		auths, err := sys.ListAuthWithContext(ctx)
+		require.NoError(t, err)
+
+		accessor := auths["jwt/"].Accessor
+		require.NoError(t, sys.PutPolicyWithContext(ctx, "gitlab-ci", fmt.Sprintf(`
+path "gitlab/dynamic/project_id/{{identity.entity.aliases.%[1]s.metadata.project_id}}/name/ci-*" {
+  capabilities = ["create", "update"]
+}`, accessor)))
+
+		idToken := func(projectID string) string {
+			signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS256, Key: key}, nil)
+			require.NoError(t, err)
+
+			now := time.Now()
+			raw, err := josejwt.Signed(signer).Claims(map[string]any{
+				"iss":            "https://gitlab.example.com",
+				"aud":            "https://vault.example.com",
+				"sub":            "project_path:mygroup/app:ref_type:branch:ref:main",
+				"iat":            now.Unix(),
+				"nbf":            now.Unix(),
+				"exp":            now.Add(5 * time.Minute).Unix(),
+				"namespace_path": "mygroup",
+				"project_id":     projectID,
+				"project_path":   "mygroup/app-" + projectID,
+			}).Serialize()
+			require.NoError(t, err)
+
+			return raw
+		}
+
+		job := loginAs(t, client, "auth/jwt/login", map[string]any{"role": "gitlab-ci", "jwt": idToken("31")})
+
+		_, err = job.Logical().Write("gitlab/dynamic/project_id/31/name/ci-deploy", map[string]any{"scopes": "read_api", "ttl": "10m"})
+		require.NoError(t, err, "a CI job may mint a token for its own project")
+
+		_, err = job.Logical().Write("gitlab/dynamic/project_id/32/name/ci-deploy", map[string]any{"scopes": "read_api"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "permission denied", "but not for another project")
+
+		other := loginAs(t, client, "auth/jwt/login", map[string]any{"role": "gitlab-ci", "jwt": idToken("32")})
+
+		_, err = other.Logical().Write("gitlab/dynamic/project_id/32/name/ci-deploy", map[string]any{"scopes": "read_api", "ttl": "10m"})
+		require.NoError(t, err, "each project gets its own entity (user_claim=project_id)")
 	})
 
 	t.Run("path help and openapi", func(t *testing.T) {
