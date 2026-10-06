@@ -242,6 +242,26 @@ func TestVault(t *testing.T) {
 		assert.Contains(t, string(out), pluginVersion)
 	})
 
+	t.Run("register and mount without explicit version", func(t *testing.T) {
+		require.NoError(t, sys.RegisterPluginWithContext(ctx, &api.RegisterPluginInput{
+			Name:    pluginName,
+			Type:    api.PluginTypeSecrets,
+			Command: pluginName,
+			SHA256:  sha,
+		}))
+		require.NoError(t, sys.MountWithContext(ctx, "gitlab-unversioned", &api.MountInput{Type: pluginName}))
+
+		m, err := sys.GetMountWithContext(ctx, "gitlab-unversioned")
+		require.NoError(t, err)
+		assert.Equal(t, pluginVersion, m.RunningVersion, "Vault should pick up the self-reported version")
+
+		_, err = logical.Write("gitlab-unversioned/config", map[string]any{"base_url": gitlab.URL, "token": "t"})
+		require.NoError(t, err)
+
+		_, err = logical.Write("gitlab-unversioned/token", map[string]any{"id": 1, "name": "unversioned", "scopes": "api"})
+		require.NoError(t, err)
+	})
+
 	t.Run("register versioned plugin in catalog", func(t *testing.T) {
 		require.NoError(t, sys.RegisterPluginWithContext(ctx, &api.RegisterPluginInput{
 			Name:    pluginName,
