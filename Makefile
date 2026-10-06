@@ -1,6 +1,10 @@
 NAME?=vault-plugin-secrets-gitlab
-# Vault version used by `make test-vault`. CI runs a matrix over the supported majors.
-VAULT_VERSION?=2.1.1
+# Vault version used by `make test-vault`. CI runs a matrix over the supported
+# releases; `latest` resolves to the newest GA release via HashiCorp checkpoint.
+VAULT_VERSION?=latest
+ifeq ($(VAULT_VERSION),latest)
+override VAULT_VERSION:=$(shell curl -fsSL https://checkpoint-api.hashicorp.com/v1/check/vault | sed -E 's/.*"current_version":"([^"]+)".*/\1/')
+endif
 VAULT_OS:=$(shell uname -s | tr A-Z a-z)
 VAULT_ARCH:=$(patsubst x86_64,amd64,$(patsubst aarch64,arm64,$(shell uname -m)))
 
@@ -11,10 +15,14 @@ get:
 	go get ./...
 
 build:
-	go build -v -o plugins/$(NAME)
+	CGO_ENABLED=0 go build -v -o plugins/$(NAME)
 
 build-linux:
 	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o plugins/$(NAME)
+
+# Snapshot release build of every OS/arch into dist/ (same as CI releases).
+release-snapshot:
+	go run github.com/goreleaser/goreleaser/v2@latest release --snapshot --clean
 
 
 lint: .tools/golangci-lint
@@ -80,4 +88,4 @@ tools: .tools .tools/docker-compose .tools/gocover-cobertura .tools/golangci-lin
 	curl -fsSL -o .tools/vault-$(VAULT_VERSION).zip https://releases.hashicorp.com/vault/$(VAULT_VERSION)/vault_$(VAULT_VERSION)_$(VAULT_OS)_$(VAULT_ARCH).zip
 	unzip -o -p .tools/vault-$(VAULT_VERSION).zip vault > $@ && chmod +x $@ && rm .tools/vault-$(VAULT_VERSION).zip
 
-.PHONY: all get build build-linux publish lint test test-vault report vault-only dev clean-dev clean-all tools
+.PHONY: all get build build-linux publish lint test test-vault release-snapshot report vault-only dev clean-dev clean-all tools

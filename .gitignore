@@ -6,3 +6,7 @@ coverage/
 .tools/
 .go/
 .idea/
+
+# Integration test / GoReleaser output
+*.test
+*.out
