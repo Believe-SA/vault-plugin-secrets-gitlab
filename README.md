@@ -252,7 +252,7 @@ Lint with `make lint` (golangci-lint, config in `.golangci.yml`).
 
 Known vulnerabilities are checked with
 [govulncheck](https://go.dev/doc/security/vuln/) on every push, pull request
-and weekly; pull requests also run GitHub dependency review.
+and weekly.
 
 ### Releases
 
